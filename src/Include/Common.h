@@ -8,9 +8,12 @@ typedef uint32_t u32;
 typedef int8_t i8;
 typedef int16_t i16;
 typedef int32_t i32;
+typedef unsigned int uint;
 
 typedef u8 Bool8;
+#if !defined(true) && !defined(false)
 enum { false = 0, true };
+#endif /* true, false */
 
 typedef struct SmallString {
     char Data[64];
