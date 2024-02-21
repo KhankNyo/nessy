@@ -10,15 +10,18 @@ typedef int16_t i16;
 typedef int32_t i32;
 
 typedef u8 Bool8;
-#ifndef true 
-#  define true 1
-#else 
-#  define false 0
-#endif /* Bool8 */
+enum { false = 0, true };
 
 typedef struct SmallString {
     char Data[64];
 } SmallString;
+
+#define STATIC_ARRAY_SIZE(Arr) (sizeof(Arr) / sizeof((Arr)[0]))
+
+
+#define AAA(OpcodeByte) (((OpcodeByte) >> 5) & 0x7)
+#define BBB(OpcodeByte) (((OpcodeByte) >> 2) & 0x7)
+#define CC(OpcodeByte)  ((OpcodeByte) & 0x3)
 
 
 
