@@ -43,6 +43,10 @@ void MC6502StepClock(MC6502 *This);
 
 
 #ifdef MC6502_IMPLEMENTATION
+#define TEST_NZ(Data) do {\
+    SET_FLAG(FLAG_N, ((Data) >> 7) & 0x1);\
+    SET_FLAG(FLAG_Z, ((Data) & 0xFF) == 0);\
+} while (0)
 #  define SET_FLAG(fl, BooleanValue) \
     (This->Flags = \
         (This->Flags & ~(fl & 0xFF)) \
@@ -51,6 +55,8 @@ void MC6502StepClock(MC6502 *This);
           )\
     )
 #  define GET_FLAG(fl) ((This->Flags >> (fl >> 8)) & 0x1)
+#  define MC6502_MAGIC_CONSTANT 0xff
+
 MC6502 MC6502Init(u16 PC, void *UserData, MC6502ReadByte ReadFn, MC6502WriteByte WriteFn)
 {
     MC6502 This = {
@@ -131,6 +137,7 @@ static u16 GetEffectiveAddress(MC6502 *This, u16 Opcode)
     uint aaa = AAA(Opcode);
     uint bbb = BBB(Opcode);
     uint cc  = CC(Opcode);
+    /* */
     Bool8 UseRegY = cc >= 2 && (aaa == 4 || aaa == 5);
     switch (bbb)
     {
@@ -201,15 +208,83 @@ static u16 GetEffectiveAddress(MC6502 *This, u16 Opcode)
 }
 
 
+typedef u8 (*MC6502RMWInstruction)(MC6502 *This, u8 Byte);
+
+static u8 RMWReadByte(MC6502 *This, u16 Address)
+{
+    u8 Byte = This->ReadByte(This, Address);
+    This->WriteByte(This, Address, Byte);
+    return Byte;
+}
+
+static u8 ROR(MC6502 *This, u8 Value)
+{
+    uint PrevFlag = GET_FLAG(FLAG_C);
+    SET_FLAG(FLAG_C, Value & 0x1);
+    u8 Result = (Value >> 1) | (PrevFlag << 7);
+    TEST_NZ(Result);
+
+    return Result;
+}
+
+static u8 ROL(MC6502 *This, u8 Value)
+{
+    uint PrevFlag = GET_FLAG(FLAG_C);
+    SET_FLAG(FLAG_C, Value >> 7);
+    u8 Result = (Value << 1) | PrevFlag;
+    TEST_NZ(Result);
+
+    return Result;
+}
+
+static u8 ASL(MC6502 *This, u8 Value)
+{
+    SET_FLAG(FLAG_C, Value >> 7);
+    u8 Result = Value << 1;
+    TEST_NZ(Result);
+
+    return Result;
+}
+
+static u8 INC(MC6502 *This, u8 Value)
+{
+    u8 Result = Value + 1;
+    TEST_NZ(Result);
+    return Result;
+}
+
+static u8 DEC(MC6502 *This, u8 Value)
+{
+    u8 Result = Value - 1;
+    TEST_NZ(Result);
+    return Result;
+}
+
+static u8 LSR(MC6502 *This, u8 Value)
+{
+    SET_FLAG(FLAG_C, Value & 0x1);
+    u8 Result = Value >> 1;
+    TEST_NZ(Result);
+
+    return Result;
+}
+
+static void SBC(MC6502 *This, u8 Value)
+{
+    u16 Src = -(u16)Value;
+    u16 Result = This->A + Src + !GET_FLAG(FLAG_C);
+    SetAdditionFlags(This, This->A, (u8)Src, Result);
+    This->A = (u8)Result;
+}
+
+
+
+
 
 void MC6502StepClock(MC6502 *This)
 {
-#define TEST_NZ(Data) do {\
-    SET_FLAG(FLAG_N, ((Data) >> 7) & 0x1);\
-    SET_FLAG(FLAG_Z, (Data) == 0);\
-} while (0)
-#define DO_COMPARISON(Left, Right) do {\
-    u16 Tmp = (u16)(Left) + -(u16)(Right);\
+#define DO_COMPARISON(u8Left, u8Right) do {\
+    u16 Tmp = (u16)(u8Left) + -(u16)(u8Right);\
     TEST_NZ(Tmp);\
     SET_FLAG(FLAG_C, Tmp > 0xFF);\
 } while (0) 
@@ -367,36 +442,22 @@ void MC6502StepClock(MC6502 *This)
     /* RMW accumulator */
     case 0x0A: /* ASL */
     {
-        SET_FLAG(FLAG_C, This->A >> 7);
-        This->A <<= 1;
-        TEST_NZ(This->A);
-
+        This->A = ASL(This, This->A);
         This->CyclesLeft = 2;
     } break;
     case 0x2A: /* ROL */
     {
-        uint PrevFlag = GET_FLAG(FLAG_C);
-        SET_FLAG(FLAG_C, This->A >> 7);
-        This->A = (This->A << 1) | PrevFlag;
-        TEST_NZ(This->A);
-
+        This->A = ROL(This, This->A);
         This->CyclesLeft = 2;
     } break;
     case 0x4A: /* LSR */
     {
-        SET_FLAG(FLAG_C, This->A & 0x1);
-        This->A >>= 1;
-        TEST_NZ(This->A);
-
+        This->A = LSR(This, This->A);
         This->CyclesLeft = 2;
     } break;
     case 0x6A: /* ROR */
     {
-        uint PrevFlag = GET_FLAG(FLAG_C);
-        SET_FLAG(FLAG_C, This->A >> 7);
-        This->A = (This->A >> 1) | (PrevFlag << 7);
-        TEST_NZ(This->A);
-
+        This->A = ROR(This, This->A);
         This->CyclesLeft = 2;
     } break;
 
@@ -428,26 +489,129 @@ void MC6502StepClock(MC6502 *This)
     case 0x5C:
     case 0x7C:
     case 0xDC:
-    case 0xFC:
+    case 0xFC: /* NOP addrm */
     {
         This->CyclesLeft = 2;
         GetEffectiveAddress(This, Opcode);
     } break;
-    case 0x9C: ABS_OP("(i) SHY", ",X"); break;
+    case 0x9C: /* SHY abs,x */
+    {
+        u16 Address = FetchWord(This);
+        u8 Byte = This->Y & ((Address >> 8) + 1);
+        This->WriteByte(This, Address + This->Y, Byte);
+        This->CyclesLeft = 5;
+    } break;
+
     /* group cc = 2 illegal */
-    case 0x9E: ABS_OP("(i) SHX", ",Y"); break;
+    case 0x9E: /* SHX abs,y */
+    {
+        u16 Address = FetchWord(This);
+        u8 Byte = This->X & ((Address >> 8) + 1);
+        This->WriteByte(This, Address + This->Y, Byte);
+        This->CyclesLeft = 5;
+    } break;
+
     /* group cc = 3 oddball illegals */
     case 0x0B:
-    case 0x2B: IMM_OP("(i) ANC"); break;
-    case 0x4B: IMM_OP("(i) ALR"); break;
-    case 0x6B: IMM_OP("(i) ARR"); break;
-    case 0x8B: IMM_OP("(i) ANE"); break;
-    case 0xAB: IMM_OP("(i) LXA"); break;
-    case 0xCB: IMM_OP("(i) SBX"); break;
-    case 0xEB: IMM_OP("(i) USBC"); break;
-    case 0x9B: ABS_OP("(i) TAS", ",Y"); break;
-    case 0xBB: ABS_OP("(i) LAS", ",Y"); break;
-    case 0x9F: ABS_OP("(i) SHA", ",Y"); break;
+    case 0x2B: /* ANC #imm */
+    {
+        u8 Tmp = This->A & FetchByte(This);
+        TEST_NZ(Tmp);
+        SET_FLAG(FLAG_C, Tmp & 0x80);
+        This->CyclesLeft = 2;
+    } break;
+    case 0x4B: /* ALR #imm */
+    {
+        u8 Tmp = This->A & FetchByte(This);
+        Tmp >>= 1;
+        TEST_NZ(Tmp);
+        SET_FLAG(FLAG_C, Tmp & 0x80);
+        This->CyclesLeft = 2;
+    } break;
+    case 0x6B: /* ARR #imm */
+    {
+        u8 Byte = FetchByte(This);
+        u8 Left = This->A & Byte;
+        u16 Result = (u16)Left + (u16)Byte;
+        SetAdditionFlags(This, Left, Byte, Result);
+        ROR(This, This->A);
+        This->CyclesLeft = 2;
+    } break;
+    case 0x8B: /* ANE #imm */
+    {
+        This->A = (This->A | MC6502_MAGIC_CONSTANT)
+            & FetchByte(This) 
+            & This->X;
+        TEST_NZ(This->A);
+        This->CyclesLeft = 2;
+    } break;
+    case 0xAB: /* LXA, aka LAX immediate */ 
+    {
+        u8 Magic = MC6502_MAGIC_CONSTANT | This->A;
+        u8 Byte = FetchByte(This) & Magic;
+        This->A = Byte;
+        This->X = Byte;
+        This->CyclesLeft = 2;
+    } break;
+    case 0xCB: 
+    /* SBX #imm: 
+     * https://www.masswerk.at/6502/6502_instruction_set.html#SBX
+     *      the documentation on this is confusing, 
+     *      it said CMP and DEX at the same time, 
+     *      but also said "(A AND X) - oper -> X, setting flags like CMP" 
+     *  This implementation assumes the latter logic is true */ 
+    {
+        u8 Value = This->A & This->X;
+        u8 Immediate = FetchByte(This);
+        DO_COMPARISON(Value, Immediate);
+        This->X = Value - Immediate;
+        This->CyclesLeft = 2;
+    } break;
+    case 0xEB: /* USBC, same as SBC #imm */
+    {
+        SBC(This, FetchByte(This));
+        This->CyclesLeft = 2;
+    } break;
+    case 0x9B: /* TAS abs,y */
+    {
+        u16 Address = FetchWord(This) + This->Y;
+        This->SP = This->A & This->X;
+        u8 Value = This->A & This->X & (u8)((Address >> 8) + 1);
+        This->WriteByte(This, Address, Value);
+
+        This->CyclesLeft = 5;
+    } break;
+    case 0xBB: /* LAS abs,y */
+    {
+        u16 Address = FetchWord(This);
+        u16 IndexedAddress = Address + This->Y;
+        u8 Byte = This->SP & This->ReadByte(This, IndexedAddress);
+        This->A = Byte;
+        This->X = Byte;
+        This->SP = Byte;
+
+        This->CyclesLeft = 4 + ((IndexedAddress >> 8) != (Address >> 8));
+    } break;
+    case 0x9F: /* SHA abs,y */
+    {
+        u16 Address = FetchWord(This);
+
+        u8 Byte = This->A & This->X & ((Address >> 8) + 1);
+        This->WriteByte(This, Address + This->Y, Byte);
+
+        This->CyclesLeft = 5;
+    } break;
+    case 0x93: /* SHA (ind),y */
+    {
+        u8 AddressPointer = FetchByte(This);
+        u16 Address = This->ReadByte(This, AddressPointer++);
+        Address |= (u16)This->ReadByte(This, AddressPointer) << 8;
+
+        u8 Byte = This->A & This->X & ((Address >> 8) + 1);
+        This->WriteByte(This, Address + This->Y, Byte);
+
+        This->CyclesLeft = 6;
+    } break;
 
 
 
@@ -588,102 +752,144 @@ void MC6502StepClock(MC6502 *This)
         } break;
         case 6: /* CMP */
         {
-            DO_COMPARISON(This->A, This->ReadByte(This, Address));
+            DO_COMPARISON(
+                This->A, 
+                This->ReadByte(This, Address)
+            );
         } break;
         case 7: /* SBC */
         {
-            u16 Src = -(u16)This->ReadByte(This, Address);
-            u16 Result = This->A + Src + !GET_FLAG(FLAG_C);
-            SetAdditionFlags(This, This->A, Src & 0xFF, Result);
-            This->A = Result & 0xFF;
+            SBC(This, This->ReadByte(This, Address));
         } break;
         }
     } break;
     case 2: /* RMW and load/store X */
     {
+        uint aaa = AAA(Opcode);
         uint bbb = BBB(Opcode);
-        if (bbb == 4) /* JAM */
+        if (bbb == 4 || (bbb == 0 && aaa < 4)) /* JAM */
         {
             This->Halt = true;
             break;
         }
-        if (bbb == 6) /* NOP */
+        if (bbb == 6) /* NOP impl */
         {
+            This->CyclesLeft = 2;
+            break;
+        }
+        if (bbb == 0) /* NOP #imm */
+        {
+            FetchByte(This);
             This->CyclesLeft = 2;
             break;
         }
 
         u16 Address = GetEffectiveAddress(This, Opcode);
-        uint aaa = AAA(Opcode);
         if (aaa == 4) /* STX */
         {
             This->WriteByte(This, Address, This->X);
+            This->CyclesLeft += 2;
         }
         else if (aaa == 5) /* LDX */
         {
             This->X = This->ReadByte(This, Address);
             TEST_NZ(This->X);
+            This->CyclesLeft += 2;
         }
         else /* RMW */
         {
-            This->CyclesLeft += 4;
             /* NOTE: RMW instructions do: 
              *   read 
              *   write old
              *   write new */
-            u8 Byte = This->ReadByte(This, Address);
-            u8 Result = 0;
-            This->WriteByte(This, Address, Byte);
+            static MC6502RMWInstruction Lookup[] = {
+                ASL,  ROL,  LSR, ROR, 
+                NULL, NULL, DEC, INC
+            };
+            MC6502RMWInstruction RMW = Lookup[aaa];
+            DEBUG_ASSERT(RMW != NULL);
 
-            switch (AAA(Opcode))
-            {
-            case 0: /* ASL */
-            {
-                SET_FLAG(FLAG_C, Byte >> 7);
-                Result = Byte << 1;
-            } break;
-            case 1: /* ROL */
-            {
-                uint PrevCarry = GET_FLAG(FLAG_C);
-                SET_FLAG(FLAG_C, Byte >> 7);
-                Result = (Byte << 1) | PrevCarry;
-            } break;
-            case 2: /* LSR */
-            {
-                SET_FLAG(FLAG_C, Byte & 0x1);
-                Result = Byte >> 1;
-            } break;
-            case 3: /* ROR */
-            {
-                uint PrevFlag = GET_FLAG(FLAG_C);
-                SET_FLAG(FLAG_C, Byte & 0x1);
-                Result = (Byte >> 1) | (PrevFlag << 7);
-            } break;
-            case 6: /* DEC */
-            {
-                Result = Byte - 1;
-            } break;
-            case 7: /* INC */
-            {
-                Result = Byte + 1;
-            } break;
-            }
-            TEST_NZ(Result);
+            u8 Byte = RMWReadByte(This, Address);
+            u8 Result = RMW(This, Byte);
             This->WriteByte(This, Address, Result);
+            This->CyclesLeft += 4;
         }
     } break;
     case 3: /* illegal instructions */
     {
-        /* oddballs are handled before */
-        static const char Mnemonic[8][4] = {
-            "SLO", "RLA", "SRE", "RRA",
-            "SAX", "LAX", "DCP", "ISC"
-        };
-        FORMAT_ADDRM(Opcode, Mnemonic[AAA(Opcode)]);
+        u16 Address = GetEffectiveAddress(This, Opcode);
+        uint aaa = AAA(Opcode);
+        if (aaa == 4) /* SAX */
+        {
+            u8 Value = This->A & This->X;
+            This->WriteByte(This, Address, Value);
+        }
+        else if (aaa == 5) /* LAX */
+        {
+            u8 Byte = This->ReadByte(This, Address);
+            This->A = Byte;
+            This->X = Byte;
+            TEST_NZ(Byte);
+        }
+        else
+        {
+            u8 Byte = RMWReadByte(This, Address);
+            u8 IntermediateResult = 0;
+            switch (AAA(Opcode))
+            {
+            case 0: /* SLO */
+            {
+                IntermediateResult = ASL(This, Byte);
+                This->A |= IntermediateResult;
+                TEST_NZ(This->A);
+            } break;
+            case 1: /* RLA */
+            {
+                IntermediateResult = ROL(This, Byte);
+                This->A &= IntermediateResult;
+                TEST_NZ(This->A);
+            } break;
+            case 2: /* SRE */
+            {
+                IntermediateResult = LSR(This, Byte);
+                This->A ^= IntermediateResult;
+                TEST_NZ(This->A);
+            } break;
+            case 3: /* RRA */
+            {
+                IntermediateResult = ROR(This, Byte);
+                u16 Tmp = This->A + IntermediateResult + GET_FLAG(FLAG_C);
+                SetAdditionFlags(This, This->A, IntermediateResult, Tmp);
+                This->A = (u8)Tmp;
+            } break;
+            case 6: /* DCP */
+            {
+                IntermediateResult = Byte - 1;
+                DO_COMPARISON(
+                    This->A, 
+                    IntermediateResult
+                );
+            } break;
+            case 7: /* ISC */
+            {
+                IntermediateResult = Byte + 1;
+                SBC(This, IntermediateResult);
+            } break;
+            }
+            This->WriteByte(This, Address, IntermediateResult);
+            This->CyclesLeft += 4;
+        }
     } break;
     } break;
     }
+#undef DO_COMPARISON
 }
+
+#undef TEST_NZ
+#undef SET_FLAG
+#undef GET_FLAG
+#undef MC6502_MAGIC_CONSTANT
+
 #ifdef STANDALONE
 #   include <stdio.h>
 #   undef STANDALONE
@@ -692,6 +898,7 @@ void MC6502StepClock(MC6502 *This)
 #   undef DISASSEMBLER_IMPLEMENTATION
 
 static u8 sMemory[0x10000];
+static char sScreen[120 * 40];
 
 static u8 ReadFn(MC6502 *This, u16 Address)
 {

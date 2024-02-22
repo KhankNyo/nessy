@@ -8,14 +8,18 @@
 /* returns 
  *     DISASM_NOT_ENOUGH_SPACE if Buffer was too small, 
  *     else index of the next instruction */
-i32 DisassembleSingleOpcode(SmallString *OutDisassembledInstruction, uint16_t PC, const uint8_t *Buffer, i32 BufferSizeBytes);
+i32 DisassembleSingleOpcode(
+    SmallString *OutDisassembledInstruction, 
+    u16 PC, const u8 *Buffer, i32 BufferSizeBytes
+);
 
 #endif /* DISASSEMBLER_H */
 
 
 #ifdef DISASSEMBLER_IMPLEMENTATION /* { */
 #include <stdio.h>
-i32 DisassembleSingleOpcode(SmallString *OutDisassembledInstruction, uint16_t PC, const uint8_t *BufferStart, i32 BufferSizeBytes)
+i32 DisassembleSingleOpcode(
+    SmallString *OutDisassembledInstruction, u16 PC, const u8 *BufferStart, i32 BufferSizeBytes)
 {
 #define READ_BYTE() \
     (Current + 1 > BufferEnd? \
@@ -27,7 +31,7 @@ i32 DisassembleSingleOpcode(SmallString *OutDisassembledInstruction, uint16_t PC
         ((OutOfSpace = true), 0) \
         : (\
             (Current += 2), \
-            (Current[-2] | ((uint16_t)Current[-1] << 8))\
+            (Current[-2] | ((u16)Current[-1] << 8))\
           )\
     )
 
@@ -53,9 +57,9 @@ i32 DisassembleSingleOpcode(SmallString *OutDisassembledInstruction, uint16_t PC
         return DISASM_NOT_ENOUGH_SPACE;
 
     Bool8 OutOfSpace = false;
-    const uint8_t *Current = BufferStart;
-    const uint8_t *BufferEnd = BufferStart + BufferSizeBytes;
-    uint8_t Opcode = READ_BYTE();
+    const u8 *Current = BufferStart;
+    const u8 *BufferEnd = BufferStart + BufferSizeBytes;
+    u8 Opcode = READ_BYTE();
     /* 
      * opcode: 0baaabbbcc
      * the switch handles corner-case instructions first,
@@ -148,7 +152,7 @@ i32 DisassembleSingleOpcode(SmallString *OutDisassembledInstruction, uint16_t PC
     {
     case 0: /* load/store y, compare y, x; branch and set/clear flags */
     {
-        unsigned bbb = BBB(Opcode);
+        uint bbb = BBB(Opcode);
         if (bbb == 6) /* clear/set flags */
         {
             static const char Mnemonic[8][4] = {
@@ -165,8 +169,8 @@ i32 DisassembleSingleOpcode(SmallString *OutDisassembledInstruction, uint16_t PC
                 "BPL", "BMI", "BVC", "BVS", 
                 "BCC", "BCS", "BNE", "BEQ"
             };
-            int8_t ByteOffset = READ_BYTE();
-            uint16_t Address = 0xFFFF & ((int32_t)PC + 2 + (int32_t)ByteOffset);
+            i8 ByteOffset = READ_BYTE();
+            u16 Address = 0xFFFF & ((int32_t)PC + 2 + (int32_t)ByteOffset);
             FORMAT_OP("%s $%04x   # %d", 
                 Mnemonic[AAA(Opcode)], Address, ByteOffset
             );
@@ -212,7 +216,7 @@ i32 DisassembleSingleOpcode(SmallString *OutDisassembledInstruction, uint16_t PC
         } break;
         case 5: /* zero page x, y */
         {
-            unsigned aaa = AAA(Opcode);
+            uint aaa = AAA(Opcode);
             ZPG_OP(Mnemonic[aaa], 
                 (aaa == 4 || aaa == 5)
                 ? ",Y": ",X"
@@ -220,7 +224,7 @@ i32 DisassembleSingleOpcode(SmallString *OutDisassembledInstruction, uint16_t PC
         } break;
         case 7: /* absolute x, y */
         {
-            unsigned aaa = AAA(Opcode);
+            uint aaa = AAA(Opcode);
             ABS_OP(Mnemonic[aaa],
                 (aaa == 4 || aaa == 5)
                 ? ",Y": ",X"
@@ -261,7 +265,7 @@ i32 DisassembleSingleOpcode(SmallString *OutDisassembledInstruction, uint16_t PC
 #       include <stdio.h>
 
 /* maximum range that a 6502 can address */
-static uint8_t sMemory[0x10000];
+static u8 sMemory[0x10000];
 static u32 sMemorySize;
 
 int main(int argc, char **argv)
@@ -313,7 +317,7 @@ int main(int argc, char **argv)
         /* print the address */
         printf("%04x: ", CurrentInstructionOffset);
 
-        const uint8_t *CurrentInstruction = &sMemory[CurrentInstructionOffset];
+        const u8 *CurrentInstruction = &sMemory[CurrentInstructionOffset];
         i32 InstructionLength = DisassembleSingleOpcode(
             &Line, 
             CurrentInstructionOffset,
