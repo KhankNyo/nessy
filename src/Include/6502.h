@@ -903,13 +903,99 @@ static char sScreen[120 * 40];
 static u8 ReadFn(MC6502 *This, u16 Address)
 {
     (void)This;
+    printf("[READING] @%04x -> %02x\n", Address, sMemory[Address]);
     return sMemory[Address];
 }
 
 static void WriteFn(MC6502 *This, u16 Address, u8 Byte)
 {
     (void)This;
+    printf("[WRITING] %02x <- %04x <- %02x\n", sMemory[Address], Address, Byte);
     sMemory[Address] = Byte;
+}
+
+static void PrintDisassembly(int PC)
+{
+#define INS_COUNT 10
+    static struct {
+        u16 Address;
+        u16 ByteCount;
+        SmallString String;
+    } InstructionBuffer[INS_COUNT] = { 0 };
+    static Bool8 Initialized = false;
+
+    if (!Initialized || 
+        !IN_RANGE(
+            InstructionBuffer[0].Address, 
+            PC, 
+            InstructionBuffer[INS_COUNT - 1].Address
+        ))
+    {
+        Initialized = true;
+        int CurrentPC = PC;
+        for (int i = 0; i < INS_COUNT; i++)
+        {
+            int InstructionSize = DisassembleSingleOpcode(
+                &InstructionBuffer[i].String, 
+                CurrentPC,
+                &sMemory[CurrentPC],
+                sizeof sMemory - CurrentPC
+            );
+            if (-1 == InstructionSize)
+            {
+                /* retry at addr 0 */
+                CurrentPC = 0;
+                i--;
+                continue;
+            }
+
+            InstructionBuffer[i].ByteCount = InstructionSize;
+            InstructionBuffer[i].Address = CurrentPC;
+            CurrentPC += InstructionSize;
+            CurrentPC %= sizeof sMemory;
+        }
+    }
+
+    for (int i = 0; i < INS_COUNT; i++)
+    {
+        /* print space or pointer */
+        const char *Pointer = (InstructionBuffer[i].Address == PC)?
+            ">> " : "   ";
+        printf("%s", Pointer);
+
+        /* print addr and bytes */
+        printf("%04x: ", InstructionBuffer[i].Address);
+        int ExpectedByteCount = 4;
+        for (int ByteIndex = 0; ByteIndex < InstructionBuffer[i].ByteCount; ByteIndex++)
+        {
+            u8 Byte = sMemory[
+                (InstructionBuffer[i].Address + ByteIndex) 
+                % sizeof sMemory
+            ];
+            printf("%02x ", Byte);
+            ExpectedByteCount--;
+        }
+        while (ExpectedByteCount--)
+        {
+            printf("   ");
+        }
+
+        /* print menmonic */
+        printf("%s\n", InstructionBuffer[i].String.Data);
+    }
+#undef INS_COUNT
+}
+
+static void PrintState(const MC6502 *Cpu)
+{
+    puts("----------------------------");
+    printf("A: %02x; X: %02x; Y: %02x; SP: %02x\n",
+        Cpu->A, Cpu->X, Cpu->Y, Cpu->SP + 0x100
+    );
+    printf("PC: %04x; SR: %02x (NV_BDIZC)\n",
+        Cpu->PC, Cpu->Flags
+    );
+    puts("----------------------------");
 }
 
 int main(int argc, char **argv)
@@ -950,8 +1036,15 @@ int main(int argc, char **argv)
     }
 
     MC6502 Cpu = MC6502Init(0, NULL, ReadFn, WriteFn);
+    Cpu.PC = 0x400;
     while (1)
     {
+        PrintDisassembly(Cpu.PC);
+        PrintState(&Cpu);
+        if ('q' == getc(stdin))
+            break;
+
+        Cpu.CyclesLeft = 0;
         MC6502StepClock(&Cpu);
     }
     return 0;
