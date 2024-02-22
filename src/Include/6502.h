@@ -903,14 +903,14 @@ static char sScreen[120 * 40];
 static u8 ReadFn(MC6502 *This, u16 Address)
 {
     (void)This;
-    printf("[READING] @%04x -> %02x\n", Address, sMemory[Address]);
+    //printf("[READING] @%04x -> %02x\n", Address, sMemory[Address]);
     return sMemory[Address];
 }
 
 static void WriteFn(MC6502 *This, u16 Address, u8 Byte)
 {
     (void)This;
-    printf("[WRITING] %02x <- %04x <- %02x\n", sMemory[Address], Address, Byte);
+    //printf("[WRITING] %02x <- %04x <- %02x\n", sMemory[Address], Address, Byte);
     sMemory[Address] = Byte;
 }
 
@@ -1037,16 +1037,22 @@ int main(int argc, char **argv)
 
     MC6502 Cpu = MC6502Init(0, NULL, ReadFn, WriteFn);
     Cpu.PC = 0x400;
+    u16 RepeatingAddr = 0;
+    uint RepeatingCount = 0;
     while (1)
     {
-        PrintDisassembly(Cpu.PC);
-        PrintState(&Cpu);
-        if ('q' == getc(stdin))
+        if (Cpu.PC == RepeatingAddr)
+            RepeatingCount++;
+        if (RepeatingCount > 20)
             break;
 
+        RepeatingAddr = Cpu.PC;
         Cpu.CyclesLeft = 0;
         MC6502StepClock(&Cpu);
     }
+
+    PrintDisassembly(Cpu.PC);
+    PrintState(&Cpu);
     return 0;
 }
 
