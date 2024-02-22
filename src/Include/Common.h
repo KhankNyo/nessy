@@ -20,6 +20,7 @@ typedef struct SmallString {
 } SmallString;
 
 #define STATIC_ARRAY_SIZE(Arr) (sizeof(Arr) / sizeof((Arr)[0]))
+#define IN_RANGE(LowRange, n, HighRange) ((LowRange) <= (n) && (n) <= (HighRange))
 
 
 #define AAA(OpcodeByte) (((OpcodeByte) >> 5) & 0x7)

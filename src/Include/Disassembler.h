@@ -128,7 +128,7 @@ i32 DisassembleSingleOpcode(SmallString *OutDisassembledInstruction, uint16_t PC
     /* group cc = 1 nops */
     case 0x89: IMM_OP("(i) NOP"); break;
     /* group cc = 2 illegal */
-    case 0x9E: ABS_OP("(i) SHX", ",Y");
+    case 0x9E: ABS_OP("(i) SHX", ",Y"); break;
     /* group cc = 3 oddball illegals */
     case 0x0B:
     case 0x2B: IMM_OP("(i) ANC"); break;

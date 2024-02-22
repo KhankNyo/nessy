@@ -1,3 +1,5 @@
 6502:
     indirect bug is ONLY FOR JMP (ind) instruction, others work fine 
     RMW instructions initially write 0xFF and then write the value 
+    PHP always set B flag to 1, PLP ignores B flag
+    BRK during flag pushing phase set B to 1
