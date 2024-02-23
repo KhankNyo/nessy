@@ -32,7 +32,9 @@ struct MC6502
     MC6502ReadByte ReadByte;
     MC6502WriteByte WriteByte;
     uint CyclesLeft;
+
     Bool8 Halt;
+    Bool8 HasDecimalMode;
 };
 
 MC6502 MC6502Init(u16 PC, void *UserData, MC6502ReadByte ReadFn, MC6502WriteByte WriteFn);
@@ -56,6 +58,9 @@ void MC6502StepClock(MC6502 *This);
     )
 #  define GET_FLAG(fl) ((This->Flags >> (fl >> 8)) & 0x1)
 #  define MC6502_MAGIC_CONSTANT 0xff
+#  define VEC_IRQ 0xFFFE
+#  define VEC_RES 0xFFFC
+#  define VEC_NMI 0xFFFA
 
 MC6502 MC6502Init(u16 PC, void *UserData, MC6502ReadByte ReadFn, MC6502WriteByte WriteFn)
 {
@@ -84,7 +89,7 @@ static u16 FetchWord(MC6502 *This)
 
 static u8 PopByte(MC6502 *This)
 {
-    return This->ReadByte(This, This->SP++ + 0x100);
+    return This->ReadByte(This, ++This->SP + 0x100);
 }
 
 static u16 PopWord(MC6502 *This)
@@ -96,7 +101,7 @@ static u16 PopWord(MC6502 *This)
 
 static void PushByte(MC6502 *This, u8 Byte)
 {
-    This->WriteByte(This, This->SP + 0x100, Byte);
+    This->WriteByte(This, This->SP-- + 0x100, Byte);
 }
 
 static void PushWord(MC6502 *This, u16 Word)
@@ -112,12 +117,12 @@ static void PushFlags(MC6502 *This)
 
 static void PopFlags(MC6502 *This)
 {
-    This->Flags = PopByte(This);
+    This->Flags = PopByte(This) & ~(FLAG_B | FLAG_UNUSED);
 }
 
 static void SetAdditionFlags(MC6502 *This, u8 a, u8 b, u16 Result)
 {
-    SET_FLAG(FLAG_N, (Result >> 7) & 0x1);
+    SET_FLAG(FLAG_N, (Result & 0x80));
     SET_FLAG(FLAG_Z, (Result & 0xFF) == 0);
     SET_FLAG(FLAG_C, Result > 0xFF);
 
@@ -168,7 +173,7 @@ static u16 GetEffectiveAddress(MC6502 *This, u16 Opcode)
     {
         u8 AddressPointer = FetchByte(This);
         u16 Address = This->ReadByte(This, (u8)AddressPointer++);
-        Address |= (u16)This->ReadByte(This, AddressPointer);
+        Address |= (u16)This->ReadByte(This, AddressPointer) << 8;
         u16 IndexedAddress = Address + This->Y;
 
         /* page boundary crossing */
@@ -192,7 +197,7 @@ static u16 GetEffectiveAddress(MC6502 *This, u16 Opcode)
     } break;
     case 7: /* abs,X/Y */
     {
-        Bool8 RMW = cc >= 2 && IN_RANGE(0, aaa, 3);
+        Bool8 RMW = cc >= 2 && !IN_RANGE(4, aaa, 5);
 
         uint IndexRegister = UseRegY? This->Y : This->X;
         u16 Address = FetchWord(This);
@@ -269,12 +274,87 @@ static u8 LSR(MC6502 *This, u8 Value)
     return Result;
 }
 
+
+static u16 BCD_ADD(u16 A_, u16 B_)
+{
+    u16 a = A_,
+        b = B_;
+
+    u16 Lower = (a & 0x0F) + (b & 0x0F);
+    Lower += (Lower > 0x09)?
+        0x06 : 0;
+
+    u16 Upper = (a & 0xF0) + (b & 0xF0) + (Lower & 0xF0);
+    Upper += IN_RANGE(0xA0, Upper & 0xFF0, 0x130)?
+        0x60 : 0;
+
+
+    u16 Result = (Upper | (Lower & 0x0F)) + ((a + b) & 0xF00);
+    return Result;
+}
+
+static void ADC(MC6502 *This, u8 Value)
+{
+    /* BCD addition */
+    if (This->HasDecimalMode && GET_FLAG(FLAG_D))
+    {
+        u16 ValueAndCarry = BCD_ADD(Value, GET_FLAG(FLAG_C));
+        u16 Result = BCD_ADD(This->A, ValueAndCarry);
+        SetAdditionFlags(This, 
+            This->A, 
+            (u8)ValueAndCarry, 
+            Result
+        );
+        This->A = (u8)Result;
+    }
+    else
+    {
+        u16 Result = This->A + Value + GET_FLAG(FLAG_C);
+        SetAdditionFlags(This, This->A, Value, Result);
+        This->A = (u8)Result;
+    }
+}
+
 static void SBC(MC6502 *This, u8 Value)
 {
-    u16 Src = -(u16)Value;
-    u16 Result = This->A + Src + !GET_FLAG(FLAG_C);
-    SetAdditionFlags(This, This->A, (u8)Src, Result);
-    This->A = (u8)Result;
+    /* BCD subtraction */
+    if (This->HasDecimalMode && GET_FLAG(FLAG_D))
+    {
+        uint Carry = !GET_FLAG(FLAG_C);
+        u8 LowNibble = (This->A & 0xF) - (Value & 0xF) - Carry;
+        uint CarryFromLowNibble = 0;
+        if ((This->A & 0xF) < (Value & 0xF) + Carry) /* overflow? */
+        {
+            LowNibble += 10;
+            CarryFromLowNibble = 0x10;
+        }
+
+        uint HighNibble = (This->A & 0xF0) - (Value & 0xF0) - CarryFromLowNibble;
+        if (HighNibble > 0x90)
+            HighNibble -= 0x60;
+
+        uint Result = HighNibble | (LowNibble & 0xF);
+        uint HasCarry = Result > 0xFF;
+        This->A = (u8)Result;
+
+        SET_FLAG(FLAG_C, !HasCarry);
+        SET_FLAG(FLAG_N, Result & 0x80);
+        SET_FLAG(FLAG_Z, (Result & 0xFF) == 0);
+    }
+    else
+    {
+        Value = ~Value;
+        u16 Result = This->A + Value + GET_FLAG(FLAG_C);
+        SetAdditionFlags(This, This->A, Value, Result);
+        This->A = (u8)Result;
+    }
+}
+
+
+static void FetchVector(MC6502 *This, u16 Vector)
+{
+    This->PC = This->ReadByte(This, Vector++);
+    This->PC |= (u16)This->ReadByte(This, Vector) << 8;
 }
 
 
@@ -284,9 +364,9 @@ static void SBC(MC6502 *This, u8 Value)
 void MC6502StepClock(MC6502 *This)
 {
 #define DO_COMPARISON(u8Left, u8Right) do {\
-    u16 Tmp = (u16)(u8Left) + -(u16)(u8Right);\
+    u16 Tmp = (u16)(u8Left) + (u16)-(u8)(u8Right);\
     TEST_NZ(Tmp);\
-    SET_FLAG(FLAG_C, Tmp > 0xFF);\
+    SET_FLAG(FLAG_C, Tmp <= 0xFF);\
 } while (0) 
     if (This->Halt || This->CyclesLeft-- > 0)
         return;
@@ -305,9 +385,14 @@ void MC6502StepClock(MC6502 *This)
     {
         /* break mark */
         (void)FetchByte(This);
+
+        /* save state and set I-disable flag */
         PushWord(This, This->PC);
         PushFlags(This);
         This->Flags |= FLAG_I;
+
+        /* fetch interrupt vector */
+        FetchVector(This, VEC_IRQ);
 
         This->CyclesLeft = 7;
     } break;
@@ -678,7 +763,7 @@ void MC6502StepClock(MC6502 *This)
                 This->Flags =  /* flag N, V */
                     (This->Flags & ~0xC0) 
                     | (Value & 0xC0);
-                SET_FLAG(FLAG_Z, Value == 0);
+                SET_FLAG(FLAG_Z, (Value & This->A) == 0);
             } break;
             case 2: /* nop */
             case 3: /* nop */ 
@@ -725,7 +810,7 @@ void MC6502StepClock(MC6502 *This)
         case 1: /* AND */
         {
             u8 Byte = This->ReadByte(This, Address);
-            This->A |= Byte;
+            This->A &= Byte;
             TEST_NZ(This->A);
         } break;
         case 2: /* EOR */
@@ -737,9 +822,7 @@ void MC6502StepClock(MC6502 *This)
         case 3: /* ADC */
         {
             u8 Byte = This->ReadByte(This, Address);
-            u16 Result = This->A + Byte + GET_FLAG(FLAG_C);
-            SetAdditionFlags(This, This->A, Byte, Result);
-            This->A = Result & 0xFF;
+            ADC(This, Byte);
         } break;
         case 4: /* STA */
         {
@@ -752,14 +835,16 @@ void MC6502StepClock(MC6502 *This)
         } break;
         case 6: /* CMP */
         {
+            u8 Byte = This->ReadByte(This, Address);
             DO_COMPARISON(
                 This->A, 
-                This->ReadByte(This, Address)
+                Byte
             );
         } break;
         case 7: /* SBC */
         {
-            SBC(This, This->ReadByte(This, Address));
+            u8 Byte = This->ReadByte(This, Address);
+            SBC(This, Byte);
         } break;
         }
     } break;
@@ -858,9 +943,7 @@ void MC6502StepClock(MC6502 *This)
             case 3: /* RRA */
             {
                 IntermediateResult = ROR(This, Byte);
-                u16 Tmp = This->A + IntermediateResult + GET_FLAG(FLAG_C);
-                SetAdditionFlags(This, This->A, IntermediateResult, Tmp);
-                This->A = (u8)Tmp;
+                ADC(This, IntermediateResult);
             } break;
             case 6: /* DCP */
             {
@@ -899,18 +982,21 @@ void MC6502StepClock(MC6502 *This)
 
 static u8 sMemory[0x10000];
 static char sScreen[120 * 40];
+static Bool8 sRWLog = false;
 
 static u8 ReadFn(MC6502 *This, u16 Address)
 {
     (void)This;
-    //printf("[READING] @%04x -> %02x\n", Address, sMemory[Address]);
+    if (sRWLog)
+        printf("[READING] @%04x -> %02x\n", Address, sMemory[Address]);
     return sMemory[Address];
 }
 
 static void WriteFn(MC6502 *This, u16 Address, u8 Byte)
 {
     (void)This;
-    //printf("[WRITING] %02x <- %04x <- %02x\n", sMemory[Address], Address, Byte);
+    if (sRWLog)
+        printf("[WRITING] %02x <- %04x <- %02x\n", sMemory[Address], Address, Byte);
     sMemory[Address] = Byte;
 }
 
@@ -1037,20 +1123,39 @@ int main(int argc, char **argv)
 
     MC6502 Cpu = MC6502Init(0, NULL, ReadFn, WriteFn);
     Cpu.PC = 0x400;
+    Cpu.HasDecimalMode = true;
     u16 RepeatingAddr = 0;
     uint RepeatingCount = 0;
+    Bool8 SingleStep = false;
     while (1)
     {
         if (Cpu.PC == RepeatingAddr)
             RepeatingCount++;
+        else RepeatingCount = 0;
         if (RepeatingCount > 20)
             break;
+        if (Cpu.PC == 0x0)
+        {
+            SingleStep = true;
+            sRWLog = true;
+        }
+        if (SingleStep)
+        {
+            PrintDisassembly(Cpu.PC);
+            PrintState(&Cpu);
+            getc(stdin);
+        }
+
 
         RepeatingAddr = Cpu.PC;
         Cpu.CyclesLeft = 0;
         MC6502StepClock(&Cpu);
     }
 
+    printf("@flag = %02x\n", sMemory[0x11]);
+    printf("@rslt = %02x\n", sMemory[0x0F]);
+    printf("@ssrc = %02x\n", sMemory[0x12]);
+    printf("@sdst = %02x\n", sMemory[0x0D]);
     PrintDisassembly(Cpu.PC);
     PrintState(&Cpu);
     return 0;
