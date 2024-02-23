@@ -1146,6 +1146,14 @@ int main(int argc, char **argv)
         MC6502StepClock(&Cpu);
     }
 
+    if (Cpu.PC == 0x3469)
+    {
+        printf("<<< TEST PASSED >>>\n");
+    }
+    else
+    {
+        printf("<<< TEST FAILED >>>\n");
+    }
     PrintDisassembly(Cpu.PC);
     PrintState(&Cpu);
     return 0;
