@@ -289,7 +289,7 @@ static u16 BCD_ADD(u16 A_, u16 B_)
         0x60 : 0;
 
 
-    u16 Result = (Upper | (Lower & 0x0F)) + ((a + b) & 0xF00);
+    u16 Result = (Upper | (Lower & 0x0F)) + ((a + b) & 0xF00); /* last term is a hack, TODO: remove it */
     return Result;
 }
 
@@ -974,14 +974,13 @@ void MC6502StepClock(MC6502 *This)
 #undef MC6502_MAGIC_CONSTANT
 
 #ifdef STANDALONE
-#   include <stdio.h>
 #   undef STANDALONE
+#   include <stdio.h>
 #   define DISASSEMBLER_IMPLEMENTATION
 #       include "Disassembler.h"
 #   undef DISASSEMBLER_IMPLEMENTATION
 
 static u8 sMemory[0x10000];
-static char sScreen[120 * 40];
 static Bool8 sRWLog = false;
 
 static u8 ReadFn(MC6502 *This, u16 Address)
@@ -1121,12 +1120,12 @@ int main(int argc, char **argv)
         fclose(f);
     }
 
-    MC6502 Cpu = MC6502Init(0, NULL, ReadFn, WriteFn);
-    Cpu.PC = 0x400;
+    MC6502 Cpu = MC6502Init(0x400, NULL, ReadFn, WriteFn);
     Cpu.HasDecimalMode = true;
     u16 RepeatingAddr = 0;
     uint RepeatingCount = 0;
     Bool8 SingleStep = false;
+    u16 SingleStepAddr = 0;
     while (1)
     {
         if (Cpu.PC == RepeatingAddr)
@@ -1134,7 +1133,7 @@ int main(int argc, char **argv)
         else RepeatingCount = 0;
         if (RepeatingCount > 20)
             break;
-        if (Cpu.PC == 0x0)
+        if (Cpu.PC == SingleStepAddr)
         {
             SingleStep = true;
             sRWLog = true;
@@ -1152,10 +1151,6 @@ int main(int argc, char **argv)
         MC6502StepClock(&Cpu);
     }
 
-    printf("@flag = %02x\n", sMemory[0x11]);
-    printf("@rslt = %02x\n", sMemory[0x0F]);
-    printf("@ssrc = %02x\n", sMemory[0x12]);
-    printf("@sdst = %02x\n", sMemory[0x0D]);
     PrintDisassembly(Cpu.PC);
     PrintState(&Cpu);
     return 0;
