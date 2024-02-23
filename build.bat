@@ -1,7 +1,7 @@
 @echo off
 
 set "INCARG=-I.\src\Include\"
-set "CC=gcc %INCARG%"
+set "CC=gcc -Wall -Wextra -Wpedantic %INCARG%"
 
 if "clean"=="%1" (
     if exist bin\ rmdir /q /s bin
@@ -11,6 +11,8 @@ if "clean"=="%1" (
     pushd bin
         cl /Zi /DSTANDALONE /DDISASSEMBLER_IMPLEMENTATION ^
             /FeDisassembler.exe ..\src\Placeholder.c
+        cl /Zi /DSTANDALONE /DMC6502_IMPLEMENTATION ^
+            /FeDisassembler.exe ..\src\Placeholder.c
     popd
 ) else (
     if not exist bin\ mkdir bin
@@ -18,5 +20,7 @@ if "clean"=="%1" (
     %CC% -DSTANDALONE -DDISASSEMBLER_IMPLEMENTATION ^
         -o bin\Disassembler.exe src\Placeholder.c
     %CC% -DSTANDALONE -DMC6502_IMPLEMENTATION ^
-        -o bin\MC6502.exe src\Placeholder.c -lgdi32 -lcomctl32
+        -o bin\MC6502.exe src\Placeholder.c
+    %CC% -o bin\Nessy.exe src\Win32.c ^
+        -lcomctl32
 )

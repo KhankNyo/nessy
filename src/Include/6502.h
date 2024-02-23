@@ -5,8 +5,8 @@
 #include "Common.h"
 
 typedef struct MC6502 MC6502;
-typedef void (*MC6502WriteByte)(MC6502 *, u16 Address, u8 Byte);
-typedef u8 (*MC6502ReadByte)(MC6502 *, u16 Address);
+typedef void (*MC6502WriteByte)(void *UserData, u16 Address, u8 Byte);
+typedef u8 (*MC6502ReadByte)(void *UserData, u16 Address);
 typedef enum MC6502Flags 
 {
     /* upper 8 bits: size, lower 8 bits: mask */
@@ -37,14 +37,14 @@ struct MC6502
     Bool8 HasDecimalMode;
 };
 
-MC6502 MC6502Init(u16 PC, void *UserData, MC6502ReadByte ReadFn, MC6502WriteByte WriteFn);
-void MC6502StepClock(MC6502 *This);
+MC6502 MC6502_Init(u16 PC, void *UserData, MC6502ReadByte ReadFn, MC6502WriteByte WriteFn);
+void MC6502_StepClock(MC6502 *This);
 
-void MC6502Reset(MC6502 *This);
+void MC6502_Reset(MC6502 *This);
 #define VEC_IRQ 0xFFFE
 #define VEC_RES 0xFFFC
 #define VEC_NMI 0xFFFA
-void MC6502Interrupt(MC6502 *This, u16 Vector);
+void MC6502_Interrupt(MC6502 *This, u16 Vector);
 
 #endif /* MC6502_H */
 
@@ -65,7 +65,7 @@ void MC6502Interrupt(MC6502 *This, u16 Vector);
 #  define GET_FLAG(fl) ((This->Flags >> (fl >> 8)) & 0x1)
 #  define MC6502_MAGIC_CONSTANT 0xff
 
-MC6502 MC6502Init(u16 PC, void *UserData, MC6502ReadByte ReadFn, MC6502WriteByte WriteFn)
+MC6502 MC6502_Init(u16 PC, void *UserData, MC6502ReadByte ReadFn, MC6502WriteByte WriteFn)
 {
     MC6502 This = {
         .PC = PC,
@@ -75,11 +75,11 @@ MC6502 MC6502Init(u16 PC, void *UserData, MC6502ReadByte ReadFn, MC6502WriteByte
         .Halt = false,
         .CyclesLeft = 0,
     };
-    MC6502Reset(&This);
+    MC6502_Reset(&This);
     return This;
 }
 
-void MC6502Reset(MC6502 *This)
+void MC6502_Reset(MC6502 *This)
 {
     This->SP = 0xFD;
     This->A = 0;
@@ -92,7 +92,7 @@ void MC6502Reset(MC6502 *This)
 
 static u8 FetchByte(MC6502 *This)
 {
-    return This->ReadByte(This, This->PC++);
+    return This->ReadByte(This->UserData, This->PC++);
 }
 
 static u16 FetchWord(MC6502 *This)
@@ -104,7 +104,7 @@ static u16 FetchWord(MC6502 *This)
 
 static u8 PopByte(MC6502 *This)
 {
-    return This->ReadByte(This, ++This->SP + 0x100);
+    return This->ReadByte(This->UserData, ++This->SP + 0x100);
 }
 
 static u16 PopWord(MC6502 *This)
@@ -116,7 +116,7 @@ static u16 PopWord(MC6502 *This)
 
 static void PushByte(MC6502 *This, u8 Byte)
 {
-    This->WriteByte(This, This->SP-- + 0x100, Byte);
+    This->WriteByte(This->UserData, This->SP-- + 0x100, Byte);
 }
 
 static void PushWord(MC6502 *This, u16 Word)
@@ -164,8 +164,8 @@ static u16 GetEffectiveAddress(MC6502 *This, u16 Opcode)
     case 0: /* (ind,X) */
     {
         u8 AddressPointer = (u8)(FetchByte(This) + This->X);
-        u16 Address = This->ReadByte(This, (u8)AddressPointer++);
-        Address |= (u16)This->ReadByte(This, AddressPointer) << 8;
+        u16 Address = This->ReadByte(This->UserData, (u8)AddressPointer++);
+        Address |= (u16)This->ReadByte(This->UserData, AddressPointer) << 8;
 
         This->CyclesLeft += 4;
         return Address;
@@ -187,8 +187,8 @@ static u16 GetEffectiveAddress(MC6502 *This, u16 Opcode)
     case 4: /* (ind),Y */
     {
         u8 AddressPointer = FetchByte(This);
-        u16 Address = This->ReadByte(This, (u8)AddressPointer++);
-        Address |= (u16)This->ReadByte(This, AddressPointer) << 8;
+        u16 Address = This->ReadByte(This->UserData, (u8)AddressPointer++);
+        Address |= (u16)This->ReadByte(This->UserData, AddressPointer) << 8;
         u16 IndexedAddress = Address + This->Y;
 
         /* page boundary crossing */
@@ -232,8 +232,8 @@ typedef u8 (*MC6502RMWInstruction)(MC6502 *This, u8 Byte);
 
 static u8 RMWReadByte(MC6502 *This, u16 Address)
 {
-    u8 Byte = This->ReadByte(This, Address);
-    This->WriteByte(This, Address, Byte);
+    u8 Byte = This->ReadByte(This->UserData, Address);
+    This->WriteByte(This->UserData, Address, Byte);
     return Byte;
 }
 
@@ -363,14 +363,14 @@ static void SBC(MC6502 *This, u8 Value)
 
 static void FetchVector(MC6502 *This, u16 Vector)
 {
-    This->PC = This->ReadByte(This, Vector++);
-    This->PC |= (u16)This->ReadByte(This, Vector) << 8;
+    This->PC = This->ReadByte(This->UserData, Vector++);
+    This->PC |= (u16)This->ReadByte(This->UserData, Vector) << 8;
 }
 
 
 
 
-void MC6502Interrupt(MC6502 *This, u16 InterruptVector)
+void MC6502_Interrupt(MC6502 *This, u16 InterruptVector)
 {
     if (InterruptVector == VEC_IRQ && GET_FLAG(FLAG_I))
         return;
@@ -382,7 +382,7 @@ void MC6502Interrupt(MC6502 *This, u16 InterruptVector)
 
     if (InterruptVector == VEC_RES)
     {
-        MC6502Reset(This);
+        MC6502_Reset(This);
     }
     else
     {
@@ -390,7 +390,7 @@ void MC6502Interrupt(MC6502 *This, u16 InterruptVector)
     }
 }
 
-void MC6502StepClock(MC6502 *This)
+void MC6502_StepClock(MC6502 *This)
 {
 #define DO_COMPARISON(u8Left, u8Right) do {\
     u16 Tmp = (u16)(u8Left) + (u16)-(u8)(u8Right);\
@@ -433,13 +433,13 @@ void MC6502StepClock(MC6502 *This)
     case 0x6C: /* JMP (ind) */
     {
         u16 AddressPointer = FetchWord(This);
-        u16 Address = This->ReadByte(This, AddressPointer);
+        u16 Address = This->ReadByte(This->UserData, AddressPointer);
 
         /* simulate hardware bug */
         AddressPointer = 
             (AddressPointer & 0xFF00) 
             | (0x00FF & (AddressPointer + 1));
-        Address |= (u16)This->ReadByte(This, AddressPointer) << 8;
+        Address |= (u16)This->ReadByte(This->UserData, AddressPointer) << 8;
 
         This->PC = Address;
         This->CyclesLeft = 5;
@@ -612,7 +612,7 @@ void MC6502StepClock(MC6502 *This)
     {
         u16 Address = FetchWord(This);
         u8 Byte = This->Y & ((Address >> 8) + 1);
-        This->WriteByte(This, Address + This->Y, Byte);
+        This->WriteByte(This->UserData, Address + This->Y, Byte);
         This->CyclesLeft = 5;
     } break;
 
@@ -621,7 +621,7 @@ void MC6502StepClock(MC6502 *This)
     {
         u16 Address = FetchWord(This);
         u8 Byte = This->X & ((Address >> 8) + 1);
-        This->WriteByte(This, Address + This->Y, Byte);
+        This->WriteByte(This->UserData, Address + This->Y, Byte);
         This->CyclesLeft = 5;
     } break;
 
@@ -691,7 +691,7 @@ void MC6502StepClock(MC6502 *This)
         u16 Address = FetchWord(This) + This->Y;
         This->SP = This->A & This->X;
         u8 Value = This->A & This->X & (u8)((Address >> 8) + 1);
-        This->WriteByte(This, Address, Value);
+        This->WriteByte(This->UserData, Address, Value);
 
         This->CyclesLeft = 5;
     } break;
@@ -699,7 +699,7 @@ void MC6502StepClock(MC6502 *This)
     {
         u16 Address = FetchWord(This);
         u16 IndexedAddress = Address + This->Y;
-        u8 Byte = This->SP & This->ReadByte(This, IndexedAddress);
+        u8 Byte = This->SP & This->ReadByte(This->UserData, IndexedAddress);
         This->A = Byte;
         This->X = Byte;
         This->SP = Byte;
@@ -711,18 +711,18 @@ void MC6502StepClock(MC6502 *This)
         u16 Address = FetchWord(This);
 
         u8 Byte = This->A & This->X & ((Address >> 8) + 1);
-        This->WriteByte(This, Address + This->Y, Byte);
+        This->WriteByte(This->UserData, Address + This->Y, Byte);
 
         This->CyclesLeft = 5;
     } break;
     case 0x93: /* SHA (ind),y */
     {
         u8 AddressPointer = FetchByte(This);
-        u16 Address = This->ReadByte(This, AddressPointer++);
-        Address |= (u16)This->ReadByte(This, AddressPointer) << 8;
+        u16 Address = This->ReadByte(This->UserData, AddressPointer++);
+        Address |= (u16)This->ReadByte(This->UserData, AddressPointer) << 8;
 
         u8 Byte = This->A & This->X & ((Address >> 8) + 1);
-        This->WriteByte(This, Address + This->Y, Byte);
+        This->WriteByte(This->UserData, Address + This->Y, Byte);
 
         This->CyclesLeft = 6;
     } break;
@@ -787,7 +787,7 @@ void MC6502StepClock(MC6502 *This)
             case 0: /* nop */ break;
             case 1: /* BIT, ignore illegals */ 
             {
-                u8 Value = This->ReadByte(This, Address);
+                u8 Value = This->ReadByte(This->UserData, Address);
 
                 This->Flags =  /* flag N, V */
                     (This->Flags & ~0xC0) 
@@ -799,25 +799,25 @@ void MC6502StepClock(MC6502 *This)
                 break;
             case 4: /* STY, ignore SHY */
             {
-                This->WriteByte(This, Address, This->Y);
+                This->WriteByte(This->UserData, Address, This->Y);
             } break;
             case 5: /* LDY */
             {
-                This->Y = This->ReadByte(This, Address);
+                This->Y = This->ReadByte(This->UserData, Address);
                 TEST_NZ(This->Y);
             } break;
             case 6: /* CPY, ignore illegals */
             {
                 DO_COMPARISON(
                     This->Y, 
-                    This->ReadByte(This, Address)
+                    This->ReadByte(This->UserData, Address)
                 );
             } break;
             case 7: /* CPX, ignore illegals */
             {
                 DO_COMPARISON(
                     This->X, 
-                    This->ReadByte(This, Address)
+                    This->ReadByte(This->UserData, Address)
                 );
             } break;
             }
@@ -832,39 +832,39 @@ void MC6502StepClock(MC6502 *This)
         {
         case 0: /* ORA */
         {
-            u8 Byte = This->ReadByte(This, Address);
+            u8 Byte = This->ReadByte(This->UserData, Address);
             This->A |= Byte;
             TEST_NZ(This->A);
         } break;
         case 1: /* AND */
         {
-            u8 Byte = This->ReadByte(This, Address);
+            u8 Byte = This->ReadByte(This->UserData, Address);
             This->A &= Byte;
             TEST_NZ(This->A);
         } break;
         case 2: /* EOR */
         {
-            u8 Byte = This->ReadByte(This, Address);
+            u8 Byte = This->ReadByte(This->UserData, Address);
             This->A ^= Byte;
             TEST_NZ(This->A);
         } break;
         case 3: /* ADC */
         {
-            u8 Byte = This->ReadByte(This, Address);
+            u8 Byte = This->ReadByte(This->UserData, Address);
             ADC(This, Byte);
         } break;
         case 4: /* STA */
         {
-            This->WriteByte(This, Address, This->A);
+            This->WriteByte(This->UserData, Address, This->A);
         } break;
         case 5: /* LDA */
         {
-            This->A = This->ReadByte(This, Address);
+            This->A = This->ReadByte(This->UserData, Address);
             TEST_NZ(This->A);
         } break;
         case 6: /* CMP */
         {
-            u8 Byte = This->ReadByte(This, Address);
+            u8 Byte = This->ReadByte(This->UserData, Address);
             DO_COMPARISON(
                 This->A, 
                 Byte
@@ -872,7 +872,7 @@ void MC6502StepClock(MC6502 *This)
         } break;
         case 7: /* SBC */
         {
-            u8 Byte = This->ReadByte(This, Address);
+            u8 Byte = This->ReadByte(This->UserData, Address);
             SBC(This, Byte);
         } break;
         }
@@ -901,12 +901,12 @@ void MC6502StepClock(MC6502 *This)
         u16 Address = GetEffectiveAddress(This, Opcode);
         if (aaa == 4) /* STX */
         {
-            This->WriteByte(This, Address, This->X);
+            This->WriteByte(This->UserData, Address, This->X);
             This->CyclesLeft += 2;
         }
         else if (aaa == 5) /* LDX */
         {
-            This->X = This->ReadByte(This, Address);
+            This->X = This->ReadByte(This->UserData, Address);
             TEST_NZ(This->X);
             This->CyclesLeft += 2;
         }
@@ -925,7 +925,7 @@ void MC6502StepClock(MC6502 *This)
 
             u8 Byte = RMWReadByte(This, Address);
             u8 Result = RMW(This, Byte);
-            This->WriteByte(This, Address, Result);
+            This->WriteByte(This->UserData, Address, Result);
             This->CyclesLeft += 4;
         }
     } break;
@@ -936,11 +936,11 @@ void MC6502StepClock(MC6502 *This)
         if (aaa == 4) /* SAX */
         {
             u8 Value = This->A & This->X;
-            This->WriteByte(This, Address, Value);
+            This->WriteByte(This->UserData, Address, Value);
         }
         else if (aaa == 5) /* LAX */
         {
-            u8 Byte = This->ReadByte(This, Address);
+            u8 Byte = This->ReadByte(This->UserData, Address);
             This->A = Byte;
             This->X = Byte;
             TEST_NZ(Byte);
@@ -988,7 +988,7 @@ void MC6502StepClock(MC6502 *This)
                 SBC(This, IntermediateResult);
             } break;
             }
-            This->WriteByte(This, Address, IntermediateResult);
+            This->WriteByte(This->UserData, Address, IntermediateResult);
             This->CyclesLeft += 4;
         }
     } break;
@@ -1012,7 +1012,7 @@ void MC6502StepClock(MC6502 *This)
 static u8 sMemory[0x10000];
 static Bool8 sRWLog = false;
 
-static u8 ReadFn(MC6502 *This, u16 Address)
+static u8 ReadFn(void *This, u16 Address)
 {
     (void)This;
     if (sRWLog)
@@ -1020,7 +1020,7 @@ static u8 ReadFn(MC6502 *This, u16 Address)
     return sMemory[Address];
 }
 
-static void WriteFn(MC6502 *This, u16 Address, u8 Byte)
+static void WriteFn(void *This, u16 Address, u8 Byte)
 {
     (void)This;
     if (sRWLog)
@@ -1149,7 +1149,7 @@ int main(int argc, char **argv)
         fclose(f);
     }
 
-    MC6502 Cpu = MC6502Init(0x400, NULL, ReadFn, WriteFn);
+    MC6502 Cpu = MC6502_Init(0x400, NULL, ReadFn, WriteFn);
     Cpu.HasDecimalMode = true;
     u16 RepeatingAddr = 0;
     uint RepeatingCount = 0;
@@ -1178,7 +1178,7 @@ int main(int argc, char **argv)
 
         RepeatingAddr = Cpu.PC;
         Cpu.CyclesLeft = 0;
-        MC6502StepClock(&Cpu);
+        MC6502_StepClock(&Cpu);
     }
 
     if (Cpu.PC == 0x3469)
