@@ -275,21 +275,18 @@ static u8 LSR(MC6502 *This, u8 Value)
 }
 
 
-static u16 BCD_ADD(u16 A_, u16 B_)
+static u16 BCD_ADD(u16 a, u16 b)
 {
-    u16 a = A_,
-        b = B_;
-
     u16 Lower = (a & 0x0F) + (b & 0x0F);
-    Lower += (Lower > 0x09)?
-        0x06 : 0;
+    if (Lower > 0x09)
+        Lower += 0x06;
 
     u16 Upper = (a & 0xF0) + (b & 0xF0) + (Lower & 0xF0);
-    Upper += IN_RANGE(0xA0, Upper & 0xFF0, 0x130)?
-        0x60 : 0;
+    if (IN_RANGE(0xA0, Upper & 0xFF0, 0x130))
+        Upper += 0x60;
 
-
-    u16 Result = (Upper | (Lower & 0x0F)) + ((a + b) & 0xF00); /* last term is a hack, TODO: remove it */
+    u16 Carry = (a + b) & 0xF00;
+    u16 Result = (Upper | (Lower & 0x0F)) + Carry;
     return Result;
 }
 
@@ -321,9 +318,9 @@ static void SBC(MC6502 *This, u8 Value)
     if (This->HasDecimalMode && GET_FLAG(FLAG_D))
     {
         uint Carry = !GET_FLAG(FLAG_C);
-        u8 LowNibble = (This->A & 0xF) - (Value & 0xF) - Carry;
+        u8 LowNibble = (This->A & 0x0F) - (Value & 0x0F) - Carry;
         uint CarryFromLowNibble = 0;
-        if ((This->A & 0xF) < (Value & 0xF) + Carry) /* overflow? */
+        if ((This->A & 0x0F) < (Value & 0x0F) + Carry) /* overflow? */
         {
             LowNibble += 10;
             CarryFromLowNibble = 0x10;
@@ -333,13 +330,11 @@ static void SBC(MC6502 *This, u8 Value)
         if (HighNibble > 0x90)
             HighNibble -= 0x60;
 
-        uint Result = HighNibble | (LowNibble & 0xF);
-        uint HasCarry = Result > 0xFF;
-        This->A = (u8)Result;
+        uint Result = HighNibble | (LowNibble & 0x0F);
+        SET_FLAG(FLAG_C, Result <= 0xFF);
+        TEST_NZ(Result);
 
-        SET_FLAG(FLAG_C, !HasCarry);
-        SET_FLAG(FLAG_N, Result & 0x80);
-        SET_FLAG(FLAG_Z, (Result & 0xFF) == 0);
+        This->A = (u8)Result;
     }
     else
     {
