@@ -40,6 +40,12 @@ struct MC6502
 MC6502 MC6502Init(u16 PC, void *UserData, MC6502ReadByte ReadFn, MC6502WriteByte WriteFn);
 void MC6502StepClock(MC6502 *This);
 
+void MC6502Reset(MC6502 *This);
+#define VEC_IRQ 0xFFFE
+#define VEC_RES 0xFFFC
+#define VEC_NMI 0xFFFA
+void MC6502Interrupt(MC6502 *This, u16 Vector);
+
 #endif /* MC6502_H */
 
 
@@ -58,9 +64,6 @@ void MC6502StepClock(MC6502 *This);
     )
 #  define GET_FLAG(fl) ((This->Flags >> (fl >> 8)) & 0x1)
 #  define MC6502_MAGIC_CONSTANT 0xff
-#  define VEC_IRQ 0xFFFE
-#  define VEC_RES 0xFFFC
-#  define VEC_NMI 0xFFFA
 
 MC6502 MC6502Init(u16 PC, void *UserData, MC6502ReadByte ReadFn, MC6502WriteByte WriteFn)
 {
@@ -72,7 +75,19 @@ MC6502 MC6502Init(u16 PC, void *UserData, MC6502ReadByte ReadFn, MC6502WriteByte
         .Halt = false,
         .CyclesLeft = 0,
     };
+    MC6502Reset(&This);
     return This;
+}
+
+void MC6502Reset(MC6502 *This)
+{
+    This->SP = 0xFD;
+    This->A = 0;
+    This->X = 0;
+    This->Y = 0;
+    This->CyclesLeft = 7;
+    This->Opcode = 0;
+    This->Halt = false;
 }
 
 static u8 FetchByte(MC6502 *This)
@@ -355,6 +370,25 @@ static void FetchVector(MC6502 *This, u16 Vector)
 
 
 
+void MC6502Interrupt(MC6502 *This, u16 InterruptVector)
+{
+    if (InterruptVector == VEC_IRQ && GET_FLAG(FLAG_I))
+        return;
+
+    PushWord(This, This->PC);
+    PushFlags(This);
+    This->Flags |= FLAG_I;
+    FetchVector(This, InterruptVector);
+
+    if (InterruptVector == VEC_RES)
+    {
+        MC6502Reset(This);
+    }
+    else
+    {
+        This->CyclesLeft = 7;
+    }
+}
 
 void MC6502StepClock(MC6502 *This)
 {
