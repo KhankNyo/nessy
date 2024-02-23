@@ -1137,7 +1137,8 @@ int main(int argc, char **argv)
         {
             PrintDisassembly(Cpu.PC);
             PrintState(&Cpu);
-            getc(stdin);
+            if ('q' == getc(stdin))
+                break;
         }
 
 
