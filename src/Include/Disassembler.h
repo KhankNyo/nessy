@@ -18,6 +18,61 @@ i32 DisassembleSingleOpcode(
 
 #ifdef DISASSEMBLER_IMPLEMENTATION /* { */
 #include <stdio.h>
+
+
+static size_t Strlen(const char *s)
+{
+    size_t Length = 0;
+    while (*s++)
+        Length++;
+    return Length;
+}
+
+static void Memcpy(void *Dst, const void *Src, size_t ByteCount)
+{
+    u8 *DstPtr = Dst;
+    const u8 *SrcPtr = Src;
+    while (ByteCount--)
+        *DstPtr++ = *SrcPtr++;
+}
+
+static i32 Disasm_AppendString(SmallString *s, i32 At, const char *String)
+{
+    i32 StringLength = Strlen(String);
+    i32 LengthAfterAppendment = At + StringLength;
+    if (LengthAfterAppendment + 1 > (i32)sizeof(*s))
+        return (i32)sizeof(*s);
+
+    Memcpy(&s->Data[At], String, StringLength);
+    s->Data[LengthAfterAppendment] = '\0';
+    return LengthAfterAppendment;
+}
+
+static i32 Disasm_AppendHex(SmallString *s, i32 At, uint MinimumDigitCount, u32 Hex)
+{
+    char Stack[sizeof(Hex)*2];
+    static const char LookupHexDigit[] = "0123456789ABCDEF";
+    char *StackPtr = Stack;
+
+    /* generate the reversed hex number */
+    for (uint i = 0; i < MinimumDigitCount; i++)
+    {
+        *StackPtr++ = LookupHexDigit[(Hex >> i*4) & 0xF];
+    }
+
+    i32 LengthAfterAppendment = At + MinimumDigitCount;
+    if (LengthAfterAppendment + 1 > (i32)sizeof *s)
+        return (i32)sizeof *s;
+
+    /* spool it into s */
+    for (i32 i = At; i < LengthAfterAppendment; i++)
+    {
+        s->Data[i] = *(--StackPtr);
+    }
+    s->Data[LengthAfterAppendment] = '\0';
+    return LengthAfterAppendment;
+}
+
 i32 DisassembleSingleOpcode(
     SmallString *OutDisassembledInstruction, u16 PC, const u8 *BufferStart, i32 BufferSizeBytes)
 {
@@ -35,20 +90,30 @@ i32 DisassembleSingleOpcode(
           )\
     )
 
-#define FORMAT_OP(...) snprintf(OutDisassembledInstruction->Data, sizeof (SmallString), __VA_ARGS__)
-#define ABS_OP(MnemonicString, IndexRegisterString) FORMAT_OP("%s $%04x%s", MnemonicString, READ_WORD(), IndexRegisterString)
-#define ZPG_OP(MnemonicString, IndexRegisterString) FORMAT_OP("%s $%02x%s", MnemonicString, READ_BYTE(), IndexRegisterString)
-#define IMM_OP(MnemonicString) FORMAT_OP("%s #$%02x", MnemonicString, READ_BYTE())
+#define APPEND(DataType, Index, ...) Disasm_Append##DataType \
+    (OutDisassembledInstruction, Index, __VA_ARGS__)
+#define FMT_OP(MnemonicString, ArgOpenStr, ArgType, Arg, ArgCloseStr) do {\
+    const char *Mne_ = MnemonicString;\
+    int Len_ = APPEND(String, 0, Mne_);\
+    Len_ = APPEND(String, Len_, ArgOpenStr);\
+    Len_ = APPEND(Hex, Len_, sizeof(ArgType)*2, Arg);\
+    if (0 != sizeof ArgCloseStr)\
+        APPEND(String, Len_, ArgCloseStr);\
+} while (0) 
+#define ABS_OP(MnemonicString, IndexRegisterString) FMT_OP(MnemonicString, " $", u16, READ_WORD(), IndexRegisterString)
+#define ZPG_OP(MnemonicString, IndexRegisterString) FMT_OP(MnemonicString, " $", u8,  READ_BYTE(), IndexRegisterString)
+#define IND_OP(MnemonicString, IndexRegisterString) FMT_OP(MnemonicString, " #", u8,  READ_BYTE(), IndexRegisterString)
+#define IMM_OP(MnemonicString)                      FMT_OP(MnemonicString, " #$",u8,  READ_BYTE(), "")
 #define FORMAT_ADDRM(OpcodeByte, MnemonicString) do {\
     switch (BBB(OpcodeByte)) {\
-    /* (ind,X) */   case 0: FORMAT_OP("%s ($%02x,X)",   MnemonicString, READ_BYTE()); break;\
-    /* zpg */       case 1: ZPG_OP(MnemonicString, ""); break;\
-    /* #imm */      case 2: IMM_OP(MnemonicString); break;\
-    /* abs */       case 3: ABS_OP(MnemonicString, ""); break;\
-    /* (ind),Y */   case 4: FORMAT_OP("%s ($%02x),Y",   MnemonicString, READ_BYTE()); break;\
-    /* zpg,X */     case 5: ZPG_OP(MnemonicString, ",X"); break;\
-    /* abs,Y */     case 6: ABS_OP(MnemonicString, ",Y"); break;\
-    /* abs,X */     case 7: ABS_OP(MnemonicString, ",X"); break;\
+    /* (ind,X) */   case 0: FMT_OP(MnemonicString, " ($", u8,  READ_BYTE(), ",X)"); break;\
+    /* zpg */       case 1: FMT_OP(MnemonicString, " $",  u8,  READ_BYTE(), ""); break;\
+    /* #imm */      case 2: FMT_OP(MnemonicString, " #$", u8,  READ_BYTE(), ""); break;\
+    /* abs */       case 3: FMT_OP(MnemonicString, " $",  u16, READ_WORD(), ""); break;\
+    /* (ind),Y */   case 4: FMT_OP(MnemonicString, " ($", u8,  READ_BYTE(), "),Y"); break;\
+    /* zpg,X */     case 5: FMT_OP(MnemonicString, " $",  u8,  READ_BYTE(), ",X"); break;\
+    /* abs,Y */     case 6: FMT_OP(MnemonicString, " $",  u16, READ_WORD(), ",Y"); break;\
+    /* abs,X */     case 7: FMT_OP(MnemonicString, " $",  u16, READ_WORD(), ",X"); break;\
     }\
 } while (0)
 
@@ -67,28 +132,28 @@ i32 DisassembleSingleOpcode(
      * */
     switch (Opcode)
     {
-    case 0x00: FORMAT_OP("BRK"); break;
+    case 0x00: APPEND(String, 0, "BRK"); break;
     case 0x4C: ABS_OP("JMP", ""); break;
-    case 0x6C: FORMAT_OP("JMP ($%04x)", READ_WORD()); break;
+    case 0x6C: FMT_OP("JMP", " ($", u16, READ_WORD(), ")"); break;
     case 0x20: ABS_OP("JSR", ""); break;
-    case 0x40: FORMAT_OP("RTI"); break;
-    case 0x60: FORMAT_OP("RTS"); break;
+    case 0x40: APPEND(String, 0, "RTI"); break;
+    case 0x60: APPEND(String, 0, "RTS"); break;
 
     /* bit */
     case 0x24: ZPG_OP("BIT", ""); break;
     case 0x2C: ABS_OP("BIT", ""); break;
 
     /* stack */
-    case 0x08: FORMAT_OP("PHP"); break;
-    case 0x28: FORMAT_OP("PLP"); break;
-    case 0x48: FORMAT_OP("PHA"); break;
-    case 0x68: FORMAT_OP("PLA"); break;
+    case 0x08: APPEND(String, 0, "PHP"); break;
+    case 0x28: APPEND(String, 0, "PLP"); break;
+    case 0x48: APPEND(String, 0, "PHA"); break;
+    case 0x68: APPEND(String, 0, "PLA"); break;
 
     /* by 1 instructions on x and y */
-    case 0x88: FORMAT_OP("DEY"); break;
-    case 0xCA: FORMAT_OP("DEX"); break;
-    case 0xC8: FORMAT_OP("INY"); break;
-    case 0xE8: FORMAT_OP("INX"); break;
+    case 0x88: APPEND(String, 0, "DEY"); break;
+    case 0xCA: APPEND(String, 0, "DEX"); break;
+    case 0xC8: APPEND(String, 0, "INY"); break;
+    case 0xE8: APPEND(String, 0, "INX"); break;
 
     /* oddball ldy */
     case 0xBC: ABS_OP("LDY", ",X"); break;
@@ -100,15 +165,15 @@ i32 DisassembleSingleOpcode(
     case 0xE0: IMM_OP("CPX"); break;
 
     /* transfers */
-    case 0xAA: FORMAT_OP("TAX"); break;
-    case 0xA8: FORMAT_OP("TAY"); break;
-    case 0xBA: FORMAT_OP("TSX"); break;
-    case 0x9A: FORMAT_OP("TXS"); break;
-    case 0x8A: FORMAT_OP("TXA"); break;
-    case 0x98: FORMAT_OP("TYA"); break;
+    case 0xAA: APPEND(String, 0, "TAX"); break;
+    case 0xA8: APPEND(String, 0, "TAY"); break;
+    case 0xBA: APPEND(String, 0, "TSX"); break;
+    case 0x9A: APPEND(String, 0, "TXS"); break;
+    case 0x8A: APPEND(String, 0, "TXA"); break;
+    case 0x98: APPEND(String, 0, "TYA"); break;
 
     /* official nop */
-    case 0xEA: FORMAT_OP("NOP"); break;
+    case 0xEA: APPEND(String, 0, "NOP"); break;
 
     /* group cc = 0 nops */
     case 0x80: IMM_OP("(i) NOP"); break;
@@ -160,8 +225,7 @@ i32 DisassembleSingleOpcode(
                 "TYA" /* this is unreachable, but it doesn't really matter since it's an implied instruction */, 
                 "CLV", "CLD", "SED"
             };
-            /* stupid string format warning even though it's literally unreachable */
-            FORMAT_OP("%s", Mnemonic[AAA(Opcode)]);
+            APPEND(String, 0, Mnemonic[AAA(Opcode)]);
         }
         else if (bbb == 4) /* branch */
         {
@@ -171,9 +235,7 @@ i32 DisassembleSingleOpcode(
             };
             i8 ByteOffset = READ_BYTE();
             u16 Address = 0xFFFF & ((int32_t)PC + 2 + (int32_t)ByteOffset);
-            FORMAT_OP("%s $%04x   # %d", 
-                Mnemonic[AAA(Opcode)], Address, ByteOffset
-            );
+            FMT_OP(Mnemonic[AAA(Opcode)], " $", u16, Address, "");
         }
         else /* STY, LDY, CPY, CPX */
         {
@@ -202,16 +264,20 @@ i32 DisassembleSingleOpcode(
         {
         case 1: ZPG_OP(Mnemonic[AAA(Opcode)], ""); break;
         case 3: ABS_OP(Mnemonic[AAA(Opcode)], ""); break;
-        case 4: FORMAT_OP("(i) JAM"); break;
-        case 6: FORMAT_OP("(i) NOP"); break;
+        case 4: APPEND(String, 0, "(i) JAM"); break;
+        case 6: APPEND(String, 0, "(i) NOP"); break;
 
         /* accumulator mode, 
          * TXA, TAX, DEX, NOP are already handled */
-        case 2: FORMAT_OP("%s A", Mnemonic[AAA(Opcode)]); break; 
+        case 2: 
+        {
+            int Len = APPEND(String, 0, Mnemonic[AAA(Opcode)]);
+            APPEND(String, Len, " A");
+        } break;
         case 0: /* LDX #imm is the only valid instruction, but it's already handled */
         {
             if (AAA(Opcode) < 4)
-                FORMAT_OP("(i) JAM");
+                APPEND(String, 0, "(i) JAM");
             else IMM_OP("(i) NOP");
         } break;
         case 5: /* zero page x, y */
@@ -253,9 +319,11 @@ i32 DisassembleSingleOpcode(
 #undef READ_BYTE
 #undef READ_WORD
 #undef IMM_OP
+#undef IND_OP
 #undef ZPG_OP
 #undef ABS_OP
-#undef FORMAT_OP
+#undef FMT_OP
+#undef APPEND
 #undef FORMAT_ADDRM
 }
 
@@ -309,17 +377,28 @@ int main(int argc, char **argv)
     }
 
 
-    SmallString Line;
+    SmallString InstructionStr;
     i32 CurrentInstructionOffset = 0;
     i32 CurrentMemorySize = sMemorySize;
+    char Line[256];
+    char *LineSoFar;
+    int LineLen = 0;
+#define APPEND_LINE(...) do {\
+    int Remaining = sizeof(Line) - LineLen;\
+    LineLen += snprintf(LineSoFar, Remaining, __VA_ARGS__);\
+    LineSoFar = &Line[0] + LineLen;\
+} while (0) 
     while (CurrentMemorySize > 0)
     {
+        LineSoFar = Line;
+        LineLen = 0;
+
         /* print the address */
-        printf("%04x: ", CurrentInstructionOffset);
+        APPEND_LINE("%04X: ", CurrentInstructionOffset);
 
         const u8 *CurrentInstruction = &sMemory[CurrentInstructionOffset];
         i32 InstructionLength = DisassembleSingleOpcode(
-            &Line, 
+            &InstructionStr, 
             CurrentInstructionOffset,
             CurrentInstruction, 
             CurrentMemorySize
@@ -333,16 +412,21 @@ int main(int argc, char **argv)
         /* print the bytes */
         int ExpectedBytesCount = 4;
         for (int i = 0; i < InstructionLength; i++, ExpectedBytesCount--)
-            printf("%02x ", *CurrentInstruction++);
+            APPEND_LINE("%02X ", *CurrentInstruction++);
         /* print padding space between the bytes and the instruction */
         if (ExpectedBytesCount)
-            printf("%*s", ExpectedBytesCount*3, "");
+            APPEND_LINE("%*s", ExpectedBytesCount*3, "");
         /* print the instruction */
-        printf("%s\n", Line.Data);
+        APPEND_LINE("%s", InstructionStr.Data);
+
+        /* line was buffered because printf is extremely slow on Windows, 
+         * took around 20s to dump 65k bytes */
+        puts(Line);
 
         CurrentMemorySize -= InstructionLength;
         CurrentInstructionOffset += InstructionLength;
     }
+#undef APPEND_LINE
     return 0;
 }
 #   endif /* STANDALONE */ /* } */
