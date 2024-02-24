@@ -46,6 +46,20 @@ void MC6502_Reset(MC6502 *This);
 #define VEC_NMI 0xFFFA
 void MC6502_Interrupt(MC6502 *This, u16 Vector);
 
+static inline uint MC6502_FlagGet(u8 Byte, MC6502Flags Flag)
+{
+    uint Pos = Flag >> 8;
+    return (Byte >> Pos) & 0x1;
+}
+
+static inline u8 MC6502_FlagSet(u8 Byte, uint Value, MC6502Flags Flag)
+{
+    Value = 0 != Value; /* ensure 0 or 1 */
+    uint Pos = Flag >> 8;
+    uint Mask = Flag & 0xFF;
+    return (Byte & ~Mask) | (Value << Pos);
+}
+
 #endif /* MC6502_H */
 
 
@@ -55,14 +69,8 @@ void MC6502_Interrupt(MC6502 *This, u16 Vector);
     SET_FLAG(FLAG_N, ((Data) >> 7) & 0x1);\
     SET_FLAG(FLAG_Z, ((Data) & 0xFF) == 0);\
 } while (0)
-#  define SET_FLAG(fl, BooleanValue) \
-    (This->Flags = \
-        (This->Flags & ~(fl & 0xFF)) \
-        | (((BooleanValue) != 0) \
-            << (fl >> 8)\
-          )\
-    )
-#  define GET_FLAG(fl) ((This->Flags >> (fl >> 8)) & 0x1)
+#  define SET_FLAG(fl, BooleanValue)    (This->Flags = MC6502_FlagSet(This->Flags, BooleanValue, fl))
+#  define GET_FLAG(fl)                  MC6502_FlagGet(This->Flags, fl)
 #  define MC6502_MAGIC_CONSTANT 0xff
 
 MC6502 MC6502_Init(u16 PC, void *UserData, MC6502ReadByte ReadFn, MC6502WriteByte WriteFn)
