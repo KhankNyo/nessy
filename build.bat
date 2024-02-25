@@ -1,7 +1,7 @@
 @echo off
 
 set "INCARG=-I.\src\Include\"
-set "CC=gcc -Wall -Wextra -Wpedantic %INCARG%"
+set "CC=gcc -DDEBUG -Wall -Wextra -Wpedantic %INCARG%"
 
 if "clean"=="%1" (
     if exist bin\ rmdir /q /s bin
@@ -21,6 +21,7 @@ if "clean"=="%1" (
         -o bin\Disassembler.exe src\Placeholder.c
     %CC% -DSTANDALONE -DMC6502_IMPLEMENTATION ^
         -o bin\MC6502.exe src\Placeholder.c
-    %CC% -o bin\Nessy.exe src\Win32.c ^
-        -lcomctl32
+    %CC% -o bin\Nessy.exe ^
+        src\Win32.c src\Utils.c^
+        -lcomctl32 -lgdi32
 )

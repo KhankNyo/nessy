@@ -2,6 +2,7 @@
 #define DISASSEMBLER_H
 
 #include "Common.h"
+#include "Utils.h"
 
 
 #define DISASM_NOT_ENOUGH_SPACE -1
@@ -17,62 +18,6 @@ i32 DisassembleSingleOpcode(
 
 
 #ifdef DISASSEMBLER_IMPLEMENTATION /* { */
-#include <stdio.h>
-
-
-static size_t Strlen(const char *s)
-{
-    size_t Length = 0;
-    while (*s++)
-        Length++;
-    return Length;
-}
-
-static void Memcpy(void *Dst, const void *Src, size_t ByteCount)
-{
-    u8 *DstPtr = Dst;
-    const u8 *SrcPtr = Src;
-    while (ByteCount--)
-        *DstPtr++ = *SrcPtr++;
-}
-
-static i32 Disasm_AppendString(SmallString *s, i32 At, const char *String)
-{
-    i32 StringLength = Strlen(String);
-    i32 LengthAfterAppendment = At + StringLength;
-    if (LengthAfterAppendment + 1 > (i32)sizeof(*s))
-        return (i32)sizeof(*s);
-
-    Memcpy(&s->Data[At], String, StringLength);
-    s->Data[LengthAfterAppendment] = '\0';
-    return LengthAfterAppendment;
-}
-
-static i32 Disasm_AppendHex(SmallString *s, i32 At, uint MinimumDigitCount, u32 Hex)
-{
-    char Stack[sizeof(Hex)*2];
-    static const char LookupHexDigit[] = "0123456789ABCDEF";
-    char *StackPtr = Stack;
-
-    /* generate the reversed hex number */
-    for (uint i = 0; i < MinimumDigitCount; i++)
-    {
-        *StackPtr++ = LookupHexDigit[(Hex >> i*4) & 0xF];
-    }
-
-    i32 LengthAfterAppendment = At + MinimumDigitCount;
-    if (LengthAfterAppendment + 1 > (i32)sizeof *s)
-        return (i32)sizeof *s;
-
-    /* spool it into s */
-    for (i32 i = At; i < LengthAfterAppendment; i++)
-    {
-        s->Data[i] = *(--StackPtr);
-    }
-    s->Data[LengthAfterAppendment] = '\0';
-    return LengthAfterAppendment;
-}
-
 i32 DisassembleSingleOpcode(
     SmallString *OutDisassembledInstruction, u16 PC, const u8 *BufferStart, i32 BufferSizeBytes)
 {
@@ -90,8 +35,8 @@ i32 DisassembleSingleOpcode(
           )\
     )
 
-#define APPEND(DataType, Index, ...) Disasm_Append##DataType \
-    (OutDisassembledInstruction, Index, __VA_ARGS__)
+#define APPEND(DataType, Index, ...) Append##DataType \
+    (OutDisassembledInstruction->Data, sizeof(SmallString), Index, __VA_ARGS__)
 #define FMT_OP(MnemonicString, ArgOpenStr, ArgType, Arg, ArgCloseStr) do {\
     const char *Mne_ = MnemonicString;\
     int Len_ = APPEND(String, 0, Mne_);\
