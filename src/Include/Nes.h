@@ -3,6 +3,13 @@
 
 #include "Common.h"
 
+#define NES_CPU_RAM_SIZE 0x0800
+#define NES_MASTER_CLK 21477272
+#define NES_CPU_CLK 21441960
+#define NES_SCREEN_HEIGHT 240
+#define NES_SCREEN_WIDTH 256
+#define NES_SCREEN_BUFFER_SIZE (NES_SCREEN_WIDTH * NES_SCREEN_HEIGHT)
+
 typedef struct Nes_DisplayableStatus 
 {
     u16 PC, SP;
@@ -21,13 +28,15 @@ typedef struct Platform_FrameBuffer
 } Platform_FrameBuffer;
 
 Platform_FrameBuffer Nes_PlatformQueryFrameBuffer(void);
+Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(void);
 
+/* returns NULL on success, or a static error string on failure (no lifetime) */
+const char *Nes_ParseINESFile(const void *FileBuffer, isize BufferSizeBytes);
 void Nes_OnEntry(void);
 void Nes_OnLoop(void);
 void Nes_AtExit(void);
 
 double Platform_GetTimeMillisec(void);
-void Platform_NesNotifyChangeInStatus(const Nes_DisplayableStatus *Status);
 
 
 #endif /* NES_H */
