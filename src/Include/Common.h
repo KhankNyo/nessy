@@ -13,6 +13,8 @@ typedef int16_t i16;
 typedef int32_t i32;
 typedef int64_t i64;
 typedef unsigned int uint;
+typedef ptrdiff_t isize;
+typedef size_t usize;
 
 typedef u8 Bool8;
 enum { false = 0, true };
@@ -21,11 +23,12 @@ typedef struct SmallString {
     char Data[64];
 } SmallString;
 
-
 #define STATIC_ARRAY_SIZE(Arr) (sizeof(Arr) / sizeof((Arr)[0]))
 #define IN_RANGE(LowRange, n, HighRange) ((LowRange) <= (n) && (n) <= (HighRange))
 #define strfy_(x) #x
 #define STRFY(x) strfy_(x)
+
+#define BYTE_ARRAY(...) (u8[]){__VA_ARGS__}
 
 
 #ifdef DEBUG
@@ -45,7 +48,6 @@ typedef struct SmallString {
 #define AAA(OpcodeByte) (((OpcodeByte) >> 5) & 0x7)
 #define BBB(OpcodeByte) (((OpcodeByte) >> 2) & 0x7)
 #define CC(OpcodeByte)  ((OpcodeByte) & 0x3)
-
 
 
 #endif /* COMMON_H */
