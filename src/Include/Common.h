@@ -50,5 +50,13 @@ typedef struct SmallString {
 #define CC(OpcodeByte)  ((OpcodeByte) & 0x3)
 
 
+#define NES_CPU_RAM_SIZE 0x0800
+#define NES_MASTER_CLK 21477272
+#define NES_CPU_CLK 21441960
+#define NES_SCREEN_HEIGHT 240
+#define NES_SCREEN_WIDTH 256
+#define NES_SCREEN_BUFFER_SIZE (NES_SCREEN_WIDTH * NES_SCREEN_HEIGHT)
+
+
 #endif /* COMMON_H */
 

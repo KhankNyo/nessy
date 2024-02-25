@@ -7,31 +7,57 @@
 #include "Utils.h"
 #include "Nes.h"
 
+#include "Disassembler.c"
 #include "6502.c"
 #include "Cartridge.c"
+#include "PPU.c"
 
 
-#define NES_CPU_RAM_SIZE 0x0800
 
+typedef struct InstructionInfo {
+    u16 Address;
+    u16 ByteCount;
+    SmallString String;
+} InstructionInfo;
 
 typedef struct NES 
 {
     MC6502 *CPU;
-    u8 Ram[NES_CPU_RAM_SIZE];
+    NESPPU *PPU;
     NESCartridge *Cartridge;
+
+    u8 Ram[NES_CPU_RAM_SIZE];
+    u64 Cycles;
 } NES;
 
 static MC6502 sCpu;
+static NESPPU sPpu;
 static NESCartridge sCartridge;
+static u32 sScreenBuffers[NES_SCREEN_WIDTH * NES_SCREEN_HEIGHT * 2];
+static u32 *sBackBuffer = &sScreenBuffers[0];
+static u32 *sReadyBuffer = &sScreenBuffers[1];
+
+
+static u64 sNesSystemClk;
 static NES sNes = {
     .CPU = &sCpu,
+    .PPU = &sPpu,
     .Ram = {
                     /* top: */
         0xA9, 0x00, /*   lda #00 */
                     /* cont: */
         0x18,       /*   clc */
         0x69, 0x01, /*   adc #1 */
-        0xD0, -5,   /*   bnz cont */
+        0xEA,       /*   nop */
+        0xEA, 
+        0xEA, 
+        0xEA, 
+        0xEA, 
+        0xEA, 
+        0xEA, 
+        0xEA, 
+        0xEA, 
+        0xD0, -13,   /*   bnz cont */
         0x4C, 0, 0  /*   jmp top */
     },
 };
@@ -47,12 +73,23 @@ void Nes_WriteByte(void *UserData, u16 Address, u8 Byte)
         Address %= NES_CPU_RAM_SIZE;
         Nes->Ram[Address] = Byte;
     }
-    /* IO registers */
+    /* IO registers: PPU */
     else if (IN_RANGE(0x2000, Address, 0x3FFF))
     {
         Address &= 0x07;
+        switch ((NESPPU_CtrlReg)Address)
+        {
+        case PPU_CTRL: break;
+        case PPU_MASK: break;
+        case PPU_STATUS:
+        case PPU_OAM_ADDR:
+        case PPU_OAM_DATA:
+        case PPU_SCROLL:
+        case PPU_ADDR:
+        case PPU_DATA:
+        }
     }
-    /* IO registers */
+    /* IO registers: DMA */
     else if (IN_RANGE(0x4000, Address, 0x401F))
     {
     }
@@ -74,19 +111,30 @@ u8 Nes_ReadByte(void *UserData, u16 Address)
 {
     NES *Nes = UserData;
 
-    u8 DataByte = 0;
     /* ram range */
     if (Address < 0x2000)
     {
         Address %= NES_CPU_RAM_SIZE;
-        DataByte = Nes->Ram[Address];
+        return Nes->Ram[Address];
     }
-    /* IO registers */
+    /* IO registers: PPU */
     else if (IN_RANGE(0x2000, Address, 0x3FFF))
     {
         Address &= 0x07;
+        switch ((NESPPU_CtrlReg)Address)
+        {
+        case PPU_CTRL: /* read not allowed */ break;
+        case PPU_MASK: /* read not allowed */ break;
+        case PPU_STATUS:
+        case PPU_OAM_ADDR:
+        case PPU_OAM_DATA:
+        case PPU_SCROLL:
+        case PPU_ADDR:
+        case PPU_DATA:
+        }
+        return 0;
     }
-    /* IO registers */
+    /* IO registers: DMA */
     else if (IN_RANGE(0x4000, Address, 0x401F))
     {
     }
@@ -101,9 +149,8 @@ u8 Nes_ReadByte(void *UserData, u16 Address)
     /* Cartridge ROM */
     else
     {
+        return 0;
     }
-
-    return DataByte;
 }
 
 
@@ -168,8 +215,134 @@ const char *Nes_ParseINESFile(const void *INESFile, isize FileSize)
     return NULL;
 }
 
+static void Nes_OnPPUFrameCompletion(NESPPU *PPU)
+{
+    /* swap the front and back buffers */
+    u32 *Tmp = sReadyBuffer;
+    sReadyBuffer = sBackBuffer;
+    sBackBuffer = Tmp;
 
-Nes_DisplayableStatus Nes_QueryStatus(void)
+    PPU->ScreenOutput = sBackBuffer;
+}
+
+
+static int Nes_DisassembleAt(
+    char *Ptr, isize SizeLeft, 
+    const InstructionInfo *InstructionBuffer, 
+    const u8 *Memory, isize MemorySize)
+{
+    isize Length = FormatString(Ptr, SizeLeft, 
+        "{x4}: ", InstructionBuffer->Address, 
+        NULL
+    );
+
+    int ExpectedByteCount = 3;
+    for (int ByteIndex = 0; ByteIndex < InstructionBuffer->ByteCount; ByteIndex++)
+    {
+        u8 Byte = Memory[
+            (InstructionBuffer->Address + ByteIndex) & (MemorySize - 1)
+        ];
+        Length += FormatString(
+            Ptr + Length, 
+            SizeLeft - Length, 
+            "{x2} ", Byte, 
+            NULL
+        );
+        ExpectedByteCount--;
+    }
+    while (ExpectedByteCount --> 0)
+    {
+        Length = AppendString(
+            Ptr,
+            SizeLeft, 
+            Length, 
+            "   "
+        );
+    }
+    Length = AppendString(
+        Ptr, 
+        SizeLeft, 
+        Length, 
+        InstructionBuffer->String.Data
+    );
+    return Length;
+}
+
+static void Nes_Disassemble(
+    char *BeforePC, isize BeforePCSize,
+    char *AtPC, isize AtPCSize,
+    char *AfterPC, isize AfterPCSize,
+    u16 PC, const u8 *Memory, i32 MemorySize
+)
+{
+#define INS_COUNT 11
+    static InstructionInfo InstructionBuffer[INS_COUNT] = { 0 };
+    static Bool8 Initialized = false;
+
+    if (!Initialized || 
+        !IN_RANGE(
+            InstructionBuffer[0].Address, 
+            PC,
+            InstructionBuffer[INS_COUNT - 1].Address
+        ))
+    {
+        Initialized = true;
+        int CurrentPC = PC;
+        for (int i = 0; i < INS_COUNT; i++)
+        {
+            int InstructionSize = DisassembleSingleOpcode(
+                &InstructionBuffer[i].String, 
+                CurrentPC,
+                &Memory[CurrentPC & (MemorySize - 1)],
+                NES_CPU_RAM_SIZE - (CurrentPC % NES_CPU_RAM_SIZE)
+            );
+            if (-1 == InstructionSize)
+            {
+                /* retry at addr 0 */
+                CurrentPC = 0;
+                i--;
+                continue;
+            }
+
+            InstructionBuffer[i].ByteCount = InstructionSize;
+            InstructionBuffer[i].Address = CurrentPC;
+            CurrentPC += InstructionSize;
+        }
+    }
+
+
+    int i = 0;
+    while (i < INS_COUNT)
+    {
+        if (InstructionBuffer[i].Address == PC)
+            break;
+
+        AppendString(BeforePC++, BeforePCSize--, 0, "\n");
+        int Len = Nes_DisassembleAt(BeforePC, BeforePCSize, &InstructionBuffer[i], Memory, MemorySize);
+        BeforePC += Len;
+        BeforePCSize -= Len;
+        i++;
+    }
+
+    if (i < INS_COUNT)
+    {
+        Nes_DisassembleAt(AtPC, AtPCSize, &InstructionBuffer[i], Memory, MemorySize);
+        i++;
+    }
+
+    while (i < INS_COUNT)
+    {
+        int Len = Nes_DisassembleAt(AfterPC, AfterPCSize, &InstructionBuffer[i], Memory, MemorySize);
+        AfterPC += Len;
+        AfterPCSize -= Len;
+        AppendString(AfterPC++, AfterPCSize--, 0, "\n");
+        i++;
+    }
+#undef INS_COUNT
+}
+
+
+static Nes_DisplayableStatus Nes_QueryStatusForPlatform(void)
 {
     Nes_DisplayableStatus Status = {
         .A = sCpu.A,
@@ -186,20 +359,50 @@ Nes_DisplayableStatus Nes_QueryStatus(void)
         .U = MC6502_FlagGet(sCpu.Flags, FLAG_UNUSED),
         .B = MC6502_FlagGet(sCpu.Flags, FLAG_B),
         .D = MC6502_FlagGet(sCpu.Flags, FLAG_D),
-
-        .Opcode = sCpu.Opcode,
     };
+    Nes_Disassemble(
+        Status.DisasmBeforePC, sizeof Status.DisasmBeforePC,
+        Status.DisasmAtPC, sizeof Status.DisasmAtPC,
+        Status.DisasmAfterPC, sizeof Status.DisasmAfterPC, 
+        Status.PC, sNes.Ram, NES_CPU_RAM_SIZE
+    );
     return Status;
 }
+
+Platform_FrameBuffer Nes_PlatformQueryFrameBuffer(void)
+{
+    Platform_FrameBuffer Frame = {
+        .Data = sReadyBuffer,
+        .Width = NES_SCREEN_WIDTH,
+        .Height = NES_SCREEN_HEIGHT,
+    };
+    return Frame;
+}
+
+
 
 void Nes_OnEntry(void)
 {
     sCpu = MC6502_Init(0, &sNes, Nes_ReadByte, Nes_WriteByte);
+
+    sPpu = NESPPU_Init(
+        Nes_OnPPUFrameCompletion, 
+        sBackBuffer
+    );
 }
 
 void Nes_OnLoop(void)
 {
-    MC6502_StepClock(&sCpu);
+    sNesSystemClk++;
+    NESPPU_StepClock(&sPpu);
+    if (sNesSystemClk % 3 == 0)
+    {
+        MC6502_StepClock(&sCpu);
+
+        Nes_DisplayableStatus Status = Nes_QueryStatusForPlatform();
+        Platform_NesNotifyChangeInStatus(&Status);
+    }
+
 }
 
 void Nes_AtExit(void)

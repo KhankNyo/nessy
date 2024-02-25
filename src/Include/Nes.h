@@ -8,13 +8,26 @@ typedef struct Nes_DisplayableStatus
     u16 PC, SP;
     u8 A, X, Y;
     u8 N, V, U, B, D, I, Z, C;
-    u8 Opcode;
+
+    char DisasmBeforePC[512];
+    char DisasmAtPC[128];
+    char DisasmAfterPC[512];
 } Nes_DisplayableStatus;
 
-Nes_DisplayableStatus Nes_QueryStatus(void);
+typedef struct Platform_FrameBuffer 
+{
+    const void *Data;
+    u32 Width, Height;
+} Platform_FrameBuffer;
+
+Platform_FrameBuffer Nes_PlatformQueryFrameBuffer(void);
+
 void Nes_OnEntry(void);
 void Nes_OnLoop(void);
 void Nes_AtExit(void);
+
+double Platform_GetTimeMillisec(void);
+void Platform_NesNotifyChangeInStatus(const Nes_DisplayableStatus *Status);
 
 
 #endif /* NES_H */

@@ -1,7 +1,7 @@
 @echo off
 
 set "INCARG=-I.\src\Include\"
-set "CC=gcc -DDEBUG -Wall -Wextra -Wpedantic %INCARG%"
+set "CC=gcc -ggdb -DDEBUG -Wall -Wextra -Wpedantic %INCARG%"
 
 if "clean"=="%1" (
     if exist bin\ rmdir /q /s bin
