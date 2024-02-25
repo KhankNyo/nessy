@@ -9,8 +9,8 @@
 
 #include "Disassembler.c"
 #include "6502.c"
-#include "Cartridge.c"
 #include "PPU.c"
+#include "Cartridge.c"
 
 
 
@@ -27,12 +27,11 @@ typedef struct NES
     NESCartridge *Cartridge;
 
     u8 Ram[NES_CPU_RAM_SIZE];
-    u64 Cycles;
 } NES;
 
 static MC6502 sCpu;
 static NESPPU sPpu;
-static NESCartridge sCartridge;
+static NESCartridge sConnectedCartridge;
 static u32 sScreenBuffers[NES_SCREEN_WIDTH * NES_SCREEN_HEIGHT * 2];
 static u32 *sBackBuffer = &sScreenBuffers[0];
 static u32 *sReadyBuffer = &sScreenBuffers[1];
@@ -102,8 +101,9 @@ void Nes_WriteByte(void *UserData, u16 Address, u8 Byte)
     {
     }
     /* Cartridge ROM */
-    else
+    else if (sNes.Cartridge)
     {
+        NESCartridge_Write(sNes.Cartridge, Address, Byte);
     }
 }
 
@@ -147,10 +147,25 @@ u8 Nes_ReadByte(void *UserData, u16 Address)
     {
     }
     /* Cartridge ROM */
+    else if (sNes.Cartridge)
+    {
+        return NESCartridge_Read(sNes.Cartridge, Address);
+    }
+    return 0;
+}
+
+static void Nes_ConnectCartridge(NESCartridge NewCartridge)
+{
+    if (sNes.Cartridge)
+    {
+        /* TODO: save?? */
+        NESCartridge_Destroy(sNes.Cartridge);
+    }
     else
     {
-        return 0;
+        sNes.Cartridge = &sConnectedCartridge;
     }
+    *sNes.Cartridge = NewCartridge;
 }
 
 
@@ -163,7 +178,7 @@ const char *Nes_ParseINESFile(const void *INESFile, isize FileSize)
         4
     ))
     {
-        return "Unrecognized file format.";
+        return "Unrecognized file format";
     }
 
     const u8 *FileDataStart = BytePtr + 16;
@@ -175,21 +190,22 @@ const char *Nes_ParseINESFile(const void *INESFile, isize FileSize)
     u8 Flag7 = *BytePtr++;
 
     u8 MapperID = (Flag6 >> 4) | (Flag7 & 0xF0);
+    if (Flag6 & (1 << 3)) /* alternate nametable layout */
+    {
+    }
     if (Flag6 & (1 << 0)) /* name table vertical */
     {
     }
     else /* name table horizontal */
     {
     }
+
     if (Flag6 & (1 << 1)) /* battery packed ram available (aka SRAM, or WRAM) */
     {
     }
     if (Flag6 & (1 << 2)) /* 512 byte trainer (don't care) */
     {
         FileDataStart += 512;
-    }
-    if (Flag6 & (1 << 3)) /* alternate nametable layout */
-    {
     }
 
     const u8 *FilePrgRom = FileDataStart;
@@ -199,17 +215,20 @@ const char *Nes_ParseINESFile(const void *INESFile, isize FileSize)
     {
     case 0: /* */
     {
+        return "Unsupported iNes file version (0.7)";
     } break;
     case 1: /* iNes */
     {
-        sCartridge = NESCartridge_Init(
+        NESCartridge Cartridge = NESCartridge_Init(
             FilePrgRom, PrgRomSize, 
             FileChrRom, ChrRomSize, 
             MapperID
         );
+        Nes_ConnectCartridge(Cartridge);
     } break;
     case 2: /* iNes 2.0 */
     {
+        return "Unsupported iNes file version (2.0)";
     } break;
     }
     return NULL;
@@ -343,7 +362,7 @@ static void Nes_Disassemble(
 }
 
 
-static Nes_DisplayableStatus Nes_QueryStatusForPlatform(void)
+Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(void)
 {
     Nes_DisplayableStatus Status = {
         .A = sCpu.A,
@@ -385,10 +404,10 @@ Platform_FrameBuffer Nes_PlatformQueryFrameBuffer(void)
 void Nes_OnEntry(void)
 {
     sCpu = MC6502_Init(0, &sNes, Nes_ReadByte, Nes_WriteByte);
-
     sPpu = NESPPU_Init(
         Nes_OnPPUFrameCompletion, 
-        sBackBuffer
+        sBackBuffer, 
+        &sNes.Cartridge
     );
 }
 
@@ -398,16 +417,8 @@ void Nes_OnLoop(void)
     NESPPU_StepClock(&sPpu);
     if (sNesSystemClk % 3 == 0)
     {
-        Bool8 NewInstruction = (sCpu.CyclesLeft == 0);
         MC6502_StepClock(&sCpu);
-
-        if (NewInstruction)
-        {
-            Nes_DisplayableStatus Status = Nes_QueryStatusForPlatform();
-            Platform_NesNotifyChangeInStatus(&Status);
-        }
     }
-
 }
 
 void Nes_AtExit(void)
