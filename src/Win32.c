@@ -198,12 +198,12 @@ static LRESULT CALLBACK Win32_StatusWndProc(HWND Window, UINT Msg, WPARAM WParam
         char Tmp[4096];
         FormatString(
             Tmp, sizeof Tmp,
-            "A:[{x2}] ", (u32)sWin32_DisplayableStatus.A, 
-            "X:[{x2}] ", (u32)sWin32_DisplayableStatus.X,
-            "Y:[{x2}] ", (u32)sWin32_DisplayableStatus.Y, 
-            "PC:[{x4}] ", (u32)sWin32_DisplayableStatus.PC, 
-            "SP:[{x4}] ", (u32)sWin32_DisplayableStatus.SP,
-            "\n\nFlags: {s}", Flags,
+            "A:[{x2}]\n", (u32)sWin32_DisplayableStatus.A, 
+            "X:[{x2}]\n", (u32)sWin32_DisplayableStatus.X,
+            "Y:[{x2}]\n", (u32)sWin32_DisplayableStatus.Y, 
+            "PC:[{x4}]\n", (u32)sWin32_DisplayableStatus.PC, 
+            "SP:[{x4}]\n", (u32)sWin32_DisplayableStatus.SP,
+            "Flags: {s}", Flags,
             NULL
         );
         Win32_DrawTextWrap(DeviceContext, &Region, Tmp);
@@ -369,7 +369,7 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
     /* resize window */
     {
         int DefaultWidth = 1220, 
-            DefaultHeight = 720;
+            DefaultHeight = 805;
         int DefaultX = (GetSystemMetrics(SM_CXSCREEN) - DefaultWidth) / 2;
         int DefaultY = (GetSystemMetrics(SM_CYSCREEN) - DefaultHeight) / 2;
         SetWindowPos( 
@@ -390,13 +390,15 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
     double TimePassed = Platform_GetTimeMillisec();
     while (Win32_PollInputs())
     {
-        Sleep(5);
         Nes_OnLoop();
 
         double Now = Platform_GetTimeMillisec();
         if (Now - TimePassed > 1000.0 / 60.0)
         {
             TimePassed = Now;
+
+            sWin32_DisplayableStatus = Nes_PlatformQueryDisplayableStatus();
+            InvalidateRect(sWin32_Gui.StatusWindow, NULL, TRUE);
 
             sWin32_FrameBuffer = Nes_PlatformQueryFrameBuffer();
             InvalidateRect(sWin32_Gui.GameWindow, NULL, FALSE);
@@ -415,11 +417,5 @@ double Platform_GetTimeMillisec(void)
     LARGE_INTEGER Now;
     QueryPerformanceCounter(&Now);
     return (double)Now.QuadPart * sWin32_TimerFrequency;
-}
-
-void Platform_NesNotifyChangeInStatus(const Nes_DisplayableStatus *Status)
-{
-    sWin32_DisplayableStatus = *Status;
-    InvalidateRect(sWin32_Gui.StatusWindow, NULL, TRUE);
 }
 
