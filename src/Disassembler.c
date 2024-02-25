@@ -64,7 +64,7 @@ i32 DisassembleSingleOpcode(
      * */
     switch (Opcode)
     {
-    case 0x00: APPEND(String, 0, "BRK"); break;
+    case 0x00: IMM_OP("BRK"); break;
     case 0x4C: ABS_OP("JMP", ""); break;
     case 0x6C: FMT_OP("JMP", " ($", u16, READ_WORD(), ")"); break;
     case 0x20: ABS_OP("JSR", ""); break;
