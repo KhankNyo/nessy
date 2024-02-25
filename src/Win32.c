@@ -390,7 +390,7 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
     double TimePassed = Platform_GetTimeMillisec();
     while (Win32_PollInputs())
     {
-        Sleep(10);
+        Sleep(5);
         Nes_OnLoop();
 
         double Now = Platform_GetTimeMillisec();

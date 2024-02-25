@@ -317,7 +317,8 @@ static void Nes_Disassemble(
         if (InstructionBuffer[i].Address == PC)
             break;
 
-        AppendString(BeforePC++, BeforePCSize--, 0, "\n");
+        if (i)
+            AppendString(BeforePC++, BeforePCSize--, 0, "\n");
         int Len = Nes_DisassembleAt(BeforePC, BeforePCSize, &InstructionBuffer[i], Memory, MemorySize);
         BeforePC += Len;
         BeforePCSize -= Len;
@@ -397,10 +398,14 @@ void Nes_OnLoop(void)
     NESPPU_StepClock(&sPpu);
     if (sNesSystemClk % 3 == 0)
     {
+        Bool8 NewInstruction = (sCpu.CyclesLeft == 0);
         MC6502_StepClock(&sCpu);
 
-        Nes_DisplayableStatus Status = Nes_QueryStatusForPlatform();
-        Platform_NesNotifyChangeInStatus(&Status);
+        if (NewInstruction)
+        {
+            Nes_DisplayableStatus Status = Nes_QueryStatusForPlatform();
+            Platform_NesNotifyChangeInStatus(&Status);
+        }
     }
 
 }
