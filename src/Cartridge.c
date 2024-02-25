@@ -2,16 +2,20 @@
 #include <stdlib.h>
 #include "Utils.h"
 #include "Common.h"
+#include "Cartridge.h"
+#define MAPPER_INTERFACE_IMPLEMENTATION
+#include "MapperInterface.h"
+#undef MAPPER_INTERFACE_IMPLEMENTATION
 
-typedef struct NESCartridge
+void NESCartridge_Destroy(NESCartridge *Cartridge)
 {
-    isize PrgRomSize;
-    u8 *PrgRom;
-    isize ChrRomSize;
-    u8 *ChrRom;
-
-    u8 MapperID;
-} NESCartridge;
+    if (Cartridge->Rom)
+    {
+        NESMapperInterface_Destroy(Cartridge->MapperInterface);
+        free(Cartridge->Rom);
+        *Cartridge = (NESCartridge){ 0 };
+    }
+}
 
 NESCartridge NESCartridge_Init(
     const void *PrgRom, isize PrgRomSize, 
@@ -19,24 +23,33 @@ NESCartridge NESCartridge_Init(
     u8 MapperID)
 {
     NESCartridge Cartridge = {
-        .MapperID = MapperID,
-        .ChrRomSize = ChrRomSize,
-        .PrgRomSize = PrgRomSize,
+        .RomSizeBytes = PrgRomSize + ChrRomSize,
     };
-    Cartridge.PrgRom = malloc(PrgRomSize);
-    Cartridge.ChrRom = malloc(PrgRomSize);
-    DEBUG_ASSERT(Cartridge.PrgRom);
-    DEBUG_ASSERT(Cartridge.ChrRom);
+    /* create memory for both prg and chr rom */
+    Cartridge.Rom = malloc(Cartridge.RomSizeBytes);
+    DEBUG_ASSERT(Cartridge.Rom);
 
-    Memcpy(Cartridge.PrgRom, PrgRom, PrgRomSize);
-    Memcpy(Cartridge.ChrRom, ChrRom, ChrRomSize);
+    Cartridge.MapperInterface = NESMapperInterface_Init(
+        MapperID, 
+        Cartridge.Rom, 
+        PrgRom, PrgRomSize, 
+        ChrRom, ChrRomSize
+    );
+    if (NULL == Cartridge.MapperInterface)
+        NESCartridge_Destroy(&Cartridge);
+
     return Cartridge;
 }
 
-void NESCartridge_Destroy(NESCartridge *Cartridge)
+
+u8 NESCartridge_Read(NESCartridge *Cartridge, u16 Address)
 {
-    free(Cartridge->PrgRom);
-    free(Cartridge->ChrRom);
-    *Cartridge = (NESCartridge){ 0 };
+    return NESMapperInterface_Read(Cartridge->MapperInterface, Address);
 }
+
+void NESCartridge_Write(NESCartridge *Cartridge, u16 Address, u8 Byte)
+{    
+    NESMapperInterface_Write(Cartridge->MapperInterface, Address, Byte);
+}
+
 
