@@ -5,10 +5,9 @@
 
 #include "Common.h"
 #include "Utils.h"
-
 #include "Nes.h"
-#define MC6502_IMPLEMENTATION
-#include "6502.h"
+
+#include "6502.c"
 #include "Cartridge.c"
 
 

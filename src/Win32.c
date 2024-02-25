@@ -4,7 +4,10 @@
 
 #include "Common.h"
 #include "Utils.h"
+
 #include "Nes.c"
+
+
 
 
 typedef enum Win32_MenuOptions 

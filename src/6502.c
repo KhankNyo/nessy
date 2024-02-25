@@ -1,12 +1,10 @@
-#ifndef MC6502_H
-#define MC6502_H
-
-
 #include "Common.h"
 
 typedef struct MC6502 MC6502;
 typedef void (*MC6502WriteByte)(void *UserData, u16 Address, u8 Byte);
 typedef u8 (*MC6502ReadByte)(void *UserData, u16 Address);
+typedef u8 (*MC6502RMWInstruction)(MC6502 *This, u8 Byte);
+
 typedef enum MC6502Flags 
 {
     /* upper 8 bits: size, lower 8 bits: mask */
@@ -45,14 +43,18 @@ void MC6502_Reset(MC6502 *This);
 #define VEC_RES 0xFFFC
 #define VEC_NMI 0xFFFA
 void MC6502_Interrupt(MC6502 *This, u16 Vector);
+u8 MC6502_FlagSet(u8 Byte, uint Value, MC6502Flags Flag);
+uint MC6502_FlagGet(u8 Byte, MC6502Flags Flag);
 
-static inline uint MC6502_FlagGet(u8 Byte, MC6502Flags Flag)
+
+
+uint MC6502_FlagGet(u8 Byte, MC6502Flags Flag)
 {
     uint Pos = Flag >> 8;
     return (Byte >> Pos) & 0x1;
 }
 
-static inline u8 MC6502_FlagSet(u8 Byte, uint Value, MC6502Flags Flag)
+u8 MC6502_FlagSet(u8 Byte, uint Value, MC6502Flags Flag)
 {
     Value = 0 != Value; /* ensure 0 or 1 */
     uint Pos = Flag >> 8;
@@ -60,11 +62,6 @@ static inline u8 MC6502_FlagSet(u8 Byte, uint Value, MC6502Flags Flag)
     return (Byte & ~Mask) | (Value << Pos);
 }
 
-#endif /* MC6502_H */
-
-
-
-#ifdef MC6502_IMPLEMENTATION
 #define TEST_NZ(Data) do {\
     SET_FLAG(FLAG_N, ((Data) >> 7) & 0x1);\
     SET_FLAG(FLAG_Z, ((Data) & 0xFF) == 0);\
@@ -236,7 +233,6 @@ static u16 GetEffectiveAddress(MC6502 *This, u16 Opcode)
 }
 
 
-typedef u8 (*MC6502RMWInstruction)(MC6502 *This, u8 Byte);
 
 static u8 RMWReadByte(MC6502 *This, u16 Address)
 {
@@ -1011,11 +1007,9 @@ void MC6502_StepClock(MC6502 *This)
 #undef MC6502_MAGIC_CONSTANT
 
 #ifdef STANDALONE
-#   undef STANDALONE
-#   include <stdio.h>
-#   define DISASSEMBLER_IMPLEMENTATION
-#       include "Disassembler.h"
-#   undef DISASSEMBLER_IMPLEMENTATION
+#undef STANDALONE
+#include <stdio.h>
+#include "Disassembler.c"
 
 static u8 sMemory[0x10000];
 static Bool8 sRWLog = false;
@@ -1120,6 +1114,40 @@ static void PrintState(const MC6502 *Cpu)
     puts("----------------------------");
 }
 
+static Bool8 ReadFileIntoMemory(const char *FileName)
+{
+    /* open file */
+    FILE *f = fopen(FileName, "rb");
+    if (NULL == f)
+    {
+        perror(FileName);
+        goto Fail;
+    }
+
+    /* find file name */
+    fseek(f, 0, SEEK_END);
+    size_t FileSize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (FileSize > sizeof sMemory)
+    {
+        fprintf(stderr, "File must be smaller than the 6502's addressable range.");
+        goto Fail;
+    }
+
+    /* read into mem */
+    if (FileSize != fread(sMemory, 1, sizeof sMemory, f))
+    {
+        perror(FileName);
+        goto Fail;
+    }
+    fclose(f);
+    return true;
+Fail:
+    if (f)
+        fclose(f);
+    return false;
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 2)
@@ -1128,34 +1156,11 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    {
-        /* open file */
-        const char *FileName = argv[1];
-        FILE *f = fopen(FileName, "rb");
-        if (NULL == f)
-        {
-            perror(FileName);
-            return 1;
-        }
 
-        /* find file name */
-        fseek(f, 0, SEEK_END);
-        size_t FileSize = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        if (FileSize > sizeof sMemory)
-        {
-            fprintf(stderr, "File must be smaller than the 6502's addressable range.");
-            return 1;
-        }
-
-        /* read into mem */
-        if (FileSize != fread(sMemory, 1, sizeof sMemory, f))
-        {
-            perror(FileName);
-            return 1;
-        }
-        fclose(f);
-    }
+    const char *FileName = argv[1];
+    if (!ReadFileIntoMemory(FileName))
+        return 1;
+    
 
     MC6502 Cpu = MC6502_Init(0x400, NULL, ReadFn, WriteFn);
     Cpu.HasDecimalMode = true;
@@ -1202,6 +1207,5 @@ int main(int argc, char **argv)
     return 0;
 }
 
-#  endif /* STANDALONE */
-#endif /* MC6502_IMPLEMENTATION */
+#endif /* STANDALONE */
 

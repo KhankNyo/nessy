@@ -1,23 +1,10 @@
-#ifndef DISASSEMBLER_H
-#define DISASSEMBLER_H
-
-#include "Common.h"
 #include "Utils.h"
-
+#include "Common.h"
 
 #define DISASM_NOT_ENOUGH_SPACE -1
 /* returns 
  *     DISASM_NOT_ENOUGH_SPACE if Buffer was too small, 
  *     else index of the next instruction */
-i32 DisassembleSingleOpcode(
-    SmallString *OutDisassembledInstruction, 
-    u16 PC, const u8 *Buffer, i32 BufferSizeBytes
-);
-
-#endif /* DISASSEMBLER_H */
-
-
-#ifdef DISASSEMBLER_IMPLEMENTATION /* { */
 i32 DisassembleSingleOpcode(
     SmallString *OutDisassembledInstruction, u16 PC, const u8 *BufferStart, i32 BufferSizeBytes)
 {
@@ -273,13 +260,50 @@ i32 DisassembleSingleOpcode(
 }
 
 
-#   ifdef STANDALONE /* { */
-#       undef STANDALONE
-#       include <stdio.h>
+#ifdef STANDALONE 
+#undef STANDALONE
+#include <stdio.h>
 
 /* maximum range that a 6502 can address */
 static u8 sMemory[0x10000];
 static u32 sMemorySize;
+
+static Bool8 ReadFileIntoMemory(const char *FileName)
+{
+    FILE *MachineCode = fopen(FileName, "rb");
+    if (NULL == MachineCode)
+    {
+        perror(FileName);
+        goto Fail;
+    }
+
+    /* get file size */
+    fseek(MachineCode, 0, SEEK_END);
+    size_t FileSize = ftell(MachineCode);
+    fseek(MachineCode, 0, SEEK_SET);
+
+    /* file too large */
+    if (FileSize > STATIC_ARRAY_SIZE(sMemory))
+    {
+        fprintf(stderr, "File must be inside of the 6502's addressable range.");
+        goto Fail;
+    }
+    sMemorySize = FileSize;
+
+    /* read into sMemory buffer */
+    if (FileSize != fread(sMemory, 1, FileSize, MachineCode))
+    {
+        perror(FileName);
+        goto Fail;
+    }
+
+    fclose(MachineCode);
+    return true;
+Fail: 
+    if (MachineCode)
+        fclose(MachineCode);
+    return false;
+}
 
 int main(int argc, char **argv)
 {
@@ -290,37 +314,8 @@ int main(int argc, char **argv)
     }
 
     const char *FileName = argv[1];
-    {
-        FILE *MachineCode = fopen(FileName, "rb");
-        if (NULL == MachineCode)
-        {
-            perror(FileName);
-            return 1;
-        }
-
-        /* get file size */
-        fseek(MachineCode, 0, SEEK_END);
-        size_t FileSize = ftell(MachineCode);
-        fseek(MachineCode, 0, SEEK_SET);
-
-        /* file too large */
-        if (FileSize > STATIC_ARRAY_SIZE(sMemory))
-        {
-            fprintf(stderr, "File must be inside of the 6502's addressable range.");
-            return 1;
-        }
-        sMemorySize = FileSize;
-
-        /* read into sMemory buffer */
-        if (FileSize != fread(sMemory, 1, FileSize, MachineCode))
-        {
-            perror(FileName);
-            fclose(MachineCode);
-            return 1;
-        }
-        fclose(MachineCode);
-    }
-
+    if (!ReadFileIntoMemory(FileName))
+        return 1;
 
     SmallString InstructionStr;
     i32 CurrentInstructionOffset = 0;
@@ -364,7 +359,7 @@ int main(int argc, char **argv)
         /* print the instruction */
         APPEND_LINE("%s", InstructionStr.Data);
 
-        /* line was buffered because printf is extremely slow on Windows, 
+        /* line is buffered because printf is extremely slow on Windows, 
          * took around 20s to dump 65k bytes */
         puts(Line);
 
@@ -374,6 +369,5 @@ int main(int argc, char **argv)
 #undef APPEND_LINE
     return 0;
 }
-#   endif /* STANDALONE */ /* } */
-#endif /* DISASSEMBLER_IMPLEMENTATION */ /* } */
+#endif /* STANDALONE */ 
 

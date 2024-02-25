@@ -9,18 +9,20 @@ if "clean"=="%1" (
     if not exist bin\ mkdir bin
 
     pushd bin
-        cl /Zi /DSTANDALONE /DDISASSEMBLER_IMPLEMENTATION ^
-            /FeDisassembler.exe ..\src\Placeholder.c
-        cl /Zi /DSTANDALONE /DMC6502_IMPLEMENTATION ^
-            /FeDisassembler.exe ..\src\Placeholder.c
+        cl /Zi /DSTANDALONE ^
+            /FeDisassembler.exe ..\src\Disassembler.c ..\src\utils.c
+        cl /Zi /DSTANDALONE ^
+            /Fe6502.exe ..\src\6502.c ..\src\utils.c
+        cl /Zi ^
+            /FeNessy.exe ..\src\Win32.c ..\src\utils.c
     popd
 ) else (
     if not exist bin\ mkdir bin
 
-    %CC% -DSTANDALONE -DDISASSEMBLER_IMPLEMENTATION ^
-        -o bin\Disassembler.exe src\Placeholder.c
-    %CC% -DSTANDALONE -DMC6502_IMPLEMENTATION ^
-        -o bin\MC6502.exe src\Placeholder.c
+    %CC% -DSTANDALONE ^
+        -o bin\Disassembler.exe src\Disassembler.c src\Utils.c
+    %CC% -DSTANDALONE ^
+        -o bin\6502.exe src\6502.c src\Utils.c
     %CC% -o bin\Nessy.exe ^
         src\Win32.c src\Utils.c^
         -lcomctl32 -lgdi32
