@@ -12,10 +12,12 @@
 
 #define COLOR_WHITE 0x00FFFFFF
 #define COLOR_BLACK 0x00000000
+#define OPEN_FILE(Fname, Permission, ExtraPermission, FileAttr)\
+    CreateFileA(Fname, Permission, 0, NULL, ExtraPermission, FILE_ATTRIBUTE_NORMAL | (FileAttr), NULL)
 
 typedef enum Win32_MenuOptions 
 {
-    WIN32_FILE_MENU_OPEN,
+    WIN32_FILE_MENU_OPEN = 0x100,
 } Win32_MenuOptions;
 
 typedef struct Win32_Rect 
@@ -44,18 +46,76 @@ static double sWin32_TimerFrequency;
 static Nes_DisplayableStatus sWin32_DisplayableStatus;
 static Platform_FrameBuffer sWin32_FrameBuffer;
 
+static OVERLAPPED sWin32_AsyncFileReader;
+static HANDLE sWin32_FileHandle = INVALID_HANDLE_VALUE;
+static void *sWin32_FileBuffer;
+static isize sWin32_FileBufferSize;
+
+
 
 
 
 
 static void Win32_Fatal(const char *ErrorMessage)
 {
-    MessageBoxA(NULL, ErrorMessage, "Fatal", MB_ICONERROR);
+    MessageBoxA(NULL, ErrorMessage, "Fatal Error", MB_ICONERROR);
     ExitProcess(1);
 }
 
+static void Win32_ErrorBox(const char *ErrorMessage)
+{
+    MessageBoxA(NULL, ErrorMessage, "Error", MB_ICONERROR);
+}
 
-static void Win32_RegisterWindowClass(HINSTANCE Instance, const char *ClassName, WNDPROC WndProc, UINT ExtraStyles, COLORREF Color)
+static void Win32_SystemError(const char *Caption)
+{
+    DWORD ErrorCode = GetLastError();
+    LPSTR ErrorText = NULL;
+
+    FormatMessage(
+        /* use system message tables to retrieve error text */
+        FORMAT_MESSAGE_FROM_SYSTEM
+        | FORMAT_MESSAGE_ALLOCATE_BUFFER
+        | FORMAT_MESSAGE_IGNORE_INSERTS,  
+        NULL,
+        ErrorCode,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        (LPSTR)&ErrorText,
+        0,      /* minimum size for output buffer */
+        NULL
+    );
+    if (NULL != ErrorText)
+    {
+        MessageBoxA(NULL, ErrorText, Caption, MB_ICONERROR);
+        /* release memory allocated by FormatMessage() */
+        LocalFree(ErrorText);
+    }
+}
+
+static void *Win32_AllocateMemory(isize SizeBytes)
+{
+    DEBUG_ASSERT(SizeBytes > 0);
+    void *Buffer = VirtualAlloc(NULL, SizeBytes, MEM_COMMIT, PAGE_READWRITE);
+    if (!Buffer)
+    {
+        Win32_Fatal("Out of memory.");
+    }
+    return Buffer;
+}
+
+static void Win32_DeallocateMemory(void *Ptr)
+{
+    VirtualFree(Ptr, 0, MEM_RELEASE);
+}
+
+
+
+static void Win32_RegisterWindowClass(
+    HINSTANCE Instance, 
+    const char *ClassName, 
+    WNDPROC WndProc, 
+    UINT ExtraStyles, 
+    COLORREF Color)
 {
     WNDCLASSEXA WindowClass = {
         .cbSize = sizeof WindowClass,
@@ -163,6 +223,87 @@ static int Win32_DrawTextWrap(HDC DeviceContext, RECT *Region, const char *Text)
 
 
 
+static OPENFILENAMEA Win32_CreateFileSelectionPrompt(DWORD PromptFlags)
+{
+    static char FileNameBuffer[MAX_PATH];
+    /* get the current file name to show in the dialogue */
+    OPENFILENAMEA DialogueConfig = {
+        .lStructSize = sizeof(DialogueConfig),
+        .hwndOwner = sWin32_Gui.MainWindow,
+        .hInstance = 0, /* ignored if OFN_OPENTEMPLATEHANDLE is not set */
+        .lpstrFilter = "Text documents (*.txt)\0*.txt\0All files (*)\0*\0",
+        /* no custom filter */
+        /* no custom filter size */
+        /* this is how you get hacked */
+        .nFilterIndex = 2, /* the second pair of strings in lpstrFilter separated by the null terminator???? */
+        .lpstrFile = FileNameBuffer,
+
+        .nMaxFile = sizeof FileNameBuffer,
+        /* no file title, optional */
+        /* no size of the above, optional */
+        /* initial directory is current directory */
+        /* default title ('Save as' or 'Open') */
+        .Flags = PromptFlags,
+        .nFileOffset = 0,
+        .nFileExtension = 0, /* ??? */
+        /* no default extension */
+        /* no extra flags */
+    };
+    return DialogueConfig;
+}
+
+static HANDLE Win32_ReadFileAsync(const char *FileName, DWORD dwCreationDisposition)
+{
+    HANDLE FileHandle = OPEN_FILE(FileName, GENERIC_READ, dwCreationDisposition, FILE_FLAG_OVERLAPPED);
+    if (INVALID_HANDLE_VALUE == FileHandle)
+    {
+        Win32_SystemError("Unable to open file");
+        return INVALID_HANDLE_VALUE;
+    }
+
+    LARGE_INTEGER ArchaicFileSize;
+    if (!GetFileSizeEx(FileHandle, &ArchaicFileSize))
+    {
+        Win32_SystemError("Unable to retrieve file size");
+        goto CloseFile;
+    }
+
+    sWin32_AsyncFileReader = (OVERLAPPED){
+        .Offset = 0,
+        .OffsetHigh = 0,
+        .hEvent = CreateEventA(NULL, FALSE, FALSE, "AsyncReader")
+    };
+    if (INVALID_HANDLE_VALUE == sWin32_AsyncFileReader.hEvent)
+    {
+        Win32_SystemError("Unable to read file asynchronously");
+        goto CloseFile;
+    }
+
+    sWin32_FileBufferSize = ArchaicFileSize.QuadPart;
+    sWin32_FileBuffer = Win32_AllocateMemory(sWin32_FileBufferSize);
+    DWORD BytesRead;
+    if (!ReadFile(
+            FileHandle, 
+            sWin32_FileBuffer, 
+            sWin32_FileBufferSize, 
+            &BytesRead, 
+            &sWin32_AsyncFileReader
+        ) && GetLastError() != ERROR_IO_PENDING)
+    {
+        Win32_SystemError("Unable to read file");
+        goto CancelIO;
+    }
+    return FileHandle;
+CancelIO:
+    CancelIo(FileHandle);
+CloseFile:
+    CloseHandle(FileHandle);
+    return INVALID_HANDLE_VALUE;
+}
+
+
+
+
 static LRESULT CALLBACK Win32_StatusWndProc(HWND Window, UINT Msg, WPARAM WParam, LPARAM LParam)
 {
     switch (Msg)
@@ -172,51 +313,54 @@ static LRESULT CALLBACK Win32_StatusWndProc(HWND Window, UINT Msg, WPARAM WParam
         PAINTSTRUCT PaintStruct;
         HDC DeviceContext = BeginPaint(Window, &PaintStruct);
         RECT Region = PaintStruct.rcPaint;
-        SetBkColor(DeviceContext, sWin32_Gui.StatusWindowBackgroundColor);
-        SetTextColor(DeviceContext, COLOR_WHITE);
-        HFONT OldFont = NULL;
-        if (sWin32_Gui.StatusWindowFont)
-            OldFont = SelectObject(DeviceContext, sWin32_Gui.StatusWindowFont);
+        {
+            SetBkColor(DeviceContext, sWin32_Gui.StatusWindowBackgroundColor);
+            SetTextColor(DeviceContext, COLOR_WHITE);
+            HFONT OldFont = NULL;
+            if (sWin32_Gui.StatusWindowFont)
+                OldFont = SelectObject(DeviceContext, sWin32_Gui.StatusWindowFont);
 
 
-        char Flags[] = "nv_bdizc";
-        if (sWin32_DisplayableStatus.N)
-            Flags[0] -= 32;
-        if (sWin32_DisplayableStatus.V)
-            Flags[1] -= 32;
-        if (sWin32_DisplayableStatus.B)
-            Flags[3] -= 32;
-        if (sWin32_DisplayableStatus.D)
-            Flags[4] -= 32;
-        if (sWin32_DisplayableStatus.I)
-            Flags[5] -= 32;
-        if (sWin32_DisplayableStatus.Z)
-            Flags[6] -= 32;
-        if (sWin32_DisplayableStatus.C)
-            Flags[7] -= 32;
+            char Flags[] = "nv_bdizc";
+            if (sWin32_DisplayableStatus.N)
+                Flags[0] -= 32;
+            if (sWin32_DisplayableStatus.V)
+                Flags[1] -= 32;
+            if (sWin32_DisplayableStatus.B)
+                Flags[3] -= 32;
+            if (sWin32_DisplayableStatus.D)
+                Flags[4] -= 32;
+            if (sWin32_DisplayableStatus.I)
+                Flags[5] -= 32;
+            if (sWin32_DisplayableStatus.Z)
+                Flags[6] -= 32;
+            if (sWin32_DisplayableStatus.C)
+                Flags[7] -= 32;
 
-        char Tmp[4096];
-        FormatString(
-            Tmp, sizeof Tmp,
-            "A:[{x2}]\n", (u32)sWin32_DisplayableStatus.A, 
-            "X:[{x2}]\n", (u32)sWin32_DisplayableStatus.X,
-            "Y:[{x2}]\n", (u32)sWin32_DisplayableStatus.Y, 
-            "PC:[{x4}]\n", (u32)sWin32_DisplayableStatus.PC, 
-            "SP:[{x4}]\n", (u32)sWin32_DisplayableStatus.SP,
-            "Flags: {s}", Flags,
-            NULL
-        );
-        Win32_DrawTextWrap(DeviceContext, &Region, Tmp);
+            char Tmp[4096];
+            FormatString(
+                Tmp, sizeof Tmp,
+                "A:[{x2}]\n", (u32)sWin32_DisplayableStatus.A, 
+                "X:[{x2}]\n", (u32)sWin32_DisplayableStatus.X,
+                "Y:[{x2}]\n", (u32)sWin32_DisplayableStatus.Y, 
+                "PC:[{x4}]\n", (u32)sWin32_DisplayableStatus.PC, 
+                "SP:[{x4}]\n", (u32)sWin32_DisplayableStatus.SP,
+                "Flags: {s}", Flags,
+                NULL
+            );
+            Win32_DrawTextWrap(DeviceContext, &Region, Tmp);
 
-        Region.top = sWin32_Gui.MainWindowHeight / 3;
-        Region.top += Win32_DrawTextWrap(DeviceContext, &Region, sWin32_DisplayableStatus.DisasmBeforePC);
-            Win32_InvertTextAndBackgroundColors(DeviceContext);
-        Region.top += Win32_DrawTextWrap(DeviceContext, &Region, sWin32_DisplayableStatus.DisasmAtPC);
-            Win32_InvertTextAndBackgroundColors(DeviceContext);
-        Win32_DrawTextWrap(DeviceContext, &Region, sWin32_DisplayableStatus.DisasmAfterPC);
+            Region.top = sWin32_Gui.MainWindowHeight / 5;
+            Region.top += Win32_DrawTextWrap(DeviceContext, &Region, sWin32_DisplayableStatus.DisasmBeforePC);
+                Win32_InvertTextAndBackgroundColors(DeviceContext);
+            Region.top += Win32_DrawTextWrap(DeviceContext, &Region, sWin32_DisplayableStatus.DisasmAtPC);
+                Win32_InvertTextAndBackgroundColors(DeviceContext);
+            Win32_DrawTextWrap(DeviceContext, &Region, sWin32_DisplayableStatus.DisasmAfterPC);
 
-        if (OldFont)
-            SelectObject(DeviceContext, OldFont);
+            if (OldFont)
+                SelectObject(DeviceContext, OldFont);
+        }
+        DeleteDC(DeviceContext);
         EndPaint(Window, &PaintStruct);
     } break;
     default: return DefWindowProcA(Window, Msg, WParam, LParam);
@@ -274,7 +418,7 @@ static LRESULT CALLBACK Win32_MainWndProc(HWND Window, UINT Msg, WPARAM WParam, 
     case WM_CREATE:
     {
         HMENU FileMenu = CreateMenu();
-            AppendMenuA(FileMenu, MF_STRING, WIN32_FILE_MENU_OPEN, "Open");
+            AppendMenuA(FileMenu, MF_STRING, WIN32_FILE_MENU_OPEN, "&Open\tCtrl+O");
         HMENU MainMenu = CreateMenu();
             AppendMenuA(MainMenu, MF_POPUP, (UINT_PTR)FileMenu, "File");
         SetMenu(Window, MainMenu);
@@ -330,6 +474,44 @@ static LRESULT CALLBACK Win32_MainWndProc(HWND Window, UINT Msg, WPARAM WParam, 
         int Width = WindowDimensions.right - WindowDimensions.left;
         int Height = WindowDimensions.bottom - WindowDimensions.top;
         Win32_ResizeGuiComponents(Width, Height);
+    } break;    
+    case WM_KEYDOWN:
+    {
+        switch (LOWORD(WParam))
+        {
+        case 'H':
+        {
+            Nes_OnEmulatorToggleHalt();
+        } break;
+        case 'R':
+        {
+            Nes_OnEmulatorReset();
+        } break;
+        case VK_SPACE:
+        {
+            Nes_OnEmulatorSingleStep();
+        } break;
+        }
+    } break;
+    case WM_COMMAND:
+    {
+        switch ((Win32_MenuOptions)LOWORD(WParam))
+        {
+        case WIN32_FILE_MENU_OPEN:
+        {
+            if (INVALID_HANDLE_VALUE != sWin32_FileHandle)
+            {
+                Win32_SystemError("Cannot open file at this time.");
+                break;
+            }
+
+            OPENFILENAMEA Prompt = Win32_CreateFileSelectionPrompt(0);
+            if (GetOpenFileNameA(&Prompt))
+            {
+                sWin32_FileHandle = Win32_ReadFileAsync(Prompt.lpstrFile, OPEN_EXISTING);
+            }
+        } break;
+        }
     } break;
     default: return DefWindowProcA(Window, Msg, WParam, LParam);
     }
@@ -347,7 +529,48 @@ static Bool8 Win32_PollInputs(void)
         TranslateMessage(&Msg);
         DispatchMessageA(&Msg);
     }
+
+    /* check async file operation */
+    if (sWin32_FileHandle != INVALID_HANDLE_VALUE)
+    {
+        DWORD BytesReadSoFar;
+        if (GetOverlappedResult(
+            sWin32_FileHandle, 
+            &sWin32_AsyncFileReader, 
+            &BytesReadSoFar, 
+            FALSE
+        ) || GetLastError() != ERROR_IO_INCOMPLETE)
+        {
+            CloseHandle(sWin32_FileHandle);
+
+            const char *ErrorMessage = Nes_ParseINESFile(sWin32_FileBuffer, sWin32_FileBufferSize);
+            if (NULL != ErrorMessage)
+            {
+                Win32_ErrorBox(ErrorMessage);
+            }
+            Win32_DeallocateMemory(sWin32_FileBuffer);
+            sWin32_FileBuffer = NULL;
+            sWin32_FileBufferSize = 0;
+            sWin32_FileHandle = INVALID_HANDLE_VALUE;
+        }
+        else if (BytesReadSoFar != sWin32_FileBufferSize)
+        {
+            CancelIo(sWin32_FileHandle);
+            CloseHandle(sWin32_FileHandle);
+            sWin32_FileHandle = INVALID_HANDLE_VALUE;
+        }
+    }
     return true;
+}
+
+static void Win32_UpdateWindowTimer(HWND Window, UINT DontCare, UINT_PTR DontCare2, DWORD DontCare3)
+{
+    (void)Window, (void)DontCare, (void)DontCare2, (void)DontCare3;
+    sWin32_DisplayableStatus = Nes_PlatformQueryDisplayableStatus();
+    sWin32_FrameBuffer = Nes_PlatformQueryFrameBuffer();
+
+    InvalidateRect(sWin32_Gui.StatusWindow, NULL, FALSE);
+    InvalidateRect(sWin32_Gui.GameWindow, NULL, FALSE);
 }
 
 int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, int CmdShow)
@@ -365,10 +588,11 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
     const char *ClassName = "NESSY";
     Win32_RegisterWindowClass(Instance, ClassName, Win32_MainWndProc, 0, COLOR_WHITE);
     sWin32_Gui.MainWindow = Win32_CreateWindow(NULL, "Nessy", ClassName, WS_CAPTION | WS_OVERLAPPEDWINDOW);
+    SetTimer(sWin32_Gui.MainWindow, 999, 1000 / 100, Win32_UpdateWindowTimer);
 
     /* resize window */
     {
-        int DefaultWidth = 1220, 
+        int DefaultWidth = 1350, 
             DefaultHeight = 805;
         int DefaultX = (GetSystemMetrics(SM_CXSCREEN) - DefaultWidth) / 2;
         int DefaultY = (GetSystemMetrics(SM_CYSCREEN) - DefaultHeight) / 2;
@@ -387,22 +611,11 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
 
 
     Nes_OnEntry();
-    double TimePassed = Platform_GetTimeMillisec();
+    double TimeOrigin = Platform_GetTimeMillisec();
     while (Win32_PollInputs())
     {
-        Nes_OnLoop();
-
         double Now = Platform_GetTimeMillisec();
-        if (Now - TimePassed > 1000.0 / 60.0)
-        {
-            TimePassed = Now;
-
-            sWin32_DisplayableStatus = Nes_PlatformQueryDisplayableStatus();
-            InvalidateRect(sWin32_Gui.StatusWindow, NULL, TRUE);
-
-            sWin32_FrameBuffer = Nes_PlatformQueryFrameBuffer();
-            InvalidateRect(sWin32_Gui.GameWindow, NULL, FALSE);
-        }
+        Nes_OnLoop(Now - TimeOrigin);
     }
     Nes_AtExit();
 

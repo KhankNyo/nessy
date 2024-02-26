@@ -14,7 +14,8 @@
 
 
 
-typedef struct InstructionInfo {
+typedef struct InstructionInfo 
+{
     u16 Address;
     u16 ByteCount;
     SmallString String;
@@ -22,6 +23,7 @@ typedef struct InstructionInfo {
 
 typedef struct NES 
 {
+    u64 Clk;
     MC6502 *CPU;
     NESPPU *PPU;
     NESCartridge *Cartridge;
@@ -37,28 +39,12 @@ static u32 *sBackBuffer = &sScreenBuffers[0];
 static u32 *sReadyBuffer = &sScreenBuffers[1];
 
 
-static u64 sNesSystemClk;
+static Bool8 sNesSystemSingleStepCPU = false;
 static NES sNes = {
     .CPU = &sCpu,
     .PPU = &sPpu,
-    .Ram = {
-                    /* top: */
-        0xA9, 0x00, /*   lda #00 */
-                    /* cont: */
-        0x18,       /*   clc */
-        0x69, 0x01, /*   adc #1 */
-        0xEA,       /*   nop */
-        0xEA, 
-        0xEA, 
-        0xEA, 
-        0xEA, 
-        0xEA, 
-        0xEA, 
-        0xEA, 
-        0xEA, 
-        0xD0, -13,   /*   bnz cont */
-        0x4C, 0, 0  /*   jmp top */
-    },
+    .Cartridge = NULL,
+    .Ram = { 0 },
 };
 
 
@@ -76,16 +62,60 @@ void Nes_WriteByte(void *UserData, u16 Address, u8 Byte)
     else if (IN_RANGE(0x2000, Address, 0x3FFF))
     {
         Address &= 0x07;
+        NESPPU *PPU = Nes->PPU;
         switch ((NESPPU_CtrlReg)Address)
         {
-        case PPU_CTRL: break;
-        case PPU_MASK: break;
-        case PPU_STATUS:
+        case PPU_CTRL:
+        {
+            PPU->Ctrl = Byte;
+            PPU->Loopy.t = 
+                (PPU->Loopy.t & ~0x0C00) 
+                | (((u16)Byte << 10) & 0x0C00);
+        } break;
+        case PPU_MASK: PPU->Mask = Byte; break;
+        case PPU_STATUS: /* write not allowed */ break;
         case PPU_OAM_ADDR:
         case PPU_OAM_DATA:
-        case PPU_SCROLL:
+        case PPU_SCROLL: 
+        {
+            if (PPU->Loopy.w++ == 0) /* first write */
+            {
+                PPU->Loopy.x = Byte;
+                PPU->Loopy.t = 
+                    (PPU->Loopy.t & ~0x1F)
+                    | (Byte >> 3);
+            }
+            else /* second write */
+            {
+                PPU->Loopy.t = 
+                    (PPU->Loopy.t & ~0x0CE0)
+                    | ((u16)Byte << 12)
+                    | (((u16)Byte & 0xF8) << 5);
+            }
+        } break;
         case PPU_ADDR:
+        {
+            /* latching because each cpu cycle is 3 ppu cycles */
+            if (PPU->Loopy.w++ == 0) /* first write */
+            {
+                Byte &= 0x3F; /* clear 2 topmost bits */
+                PPU->Loopy.t = 
+                    (PPU->Loopy.t & 0x00FF) 
+                    | ((u16)Byte << 8);
+            }
+            else /* second write */
+            {
+                PPU->Loopy.t = 
+                    (PPU->Loopy.t & 0x7F00)
+                    | Byte;
+                PPU->Loopy.v = PPU->Loopy.t;
+            }
+        } break;
         case PPU_DATA:
+        {
+            NESPPU_WriteInternalMemory(PPU, PPU->Loopy.v, Byte);
+            PPU->Loopy.v += (PPU->Ctrl & PPUCTRL_INC32)? 32 : 1;
+        } break;
         }
     }
     /* IO registers: DMA */
@@ -121,17 +151,42 @@ u8 Nes_ReadByte(void *UserData, u16 Address)
     else if (IN_RANGE(0x2000, Address, 0x3FFF))
     {
         Address &= 0x07;
+        NESPPU *PPU = Nes->PPU;
         switch ((NESPPU_CtrlReg)Address)
         {
         case PPU_CTRL: /* read not allowed */ break;
         case PPU_MASK: /* read not allowed */ break;
-        case PPU_STATUS:
-        case PPU_OAM_ADDR:
+        case PPU_STATUS: 
+        {
+            u8 Status = PPU->Status; 
+            PPU->Status &= ~PPUSTATUS_VBLANK;
+            PPU->Loopy.w = 0;
+            return Status | PPUSTATUS_VBLANK;
+        } break;
+        case PPU_OAM_ADDR: /* read not allowed */ break;
         case PPU_OAM_DATA:
-        case PPU_SCROLL:
-        case PPU_ADDR:
+        {
+        } break;
+        case PPU_SCROLL: /* read not allowed */ break;
+        case PPU_ADDR: /* read not allowed */ break;
         case PPU_DATA:
+        {
+            u8 ReadValue;
+            if (PPU->Loopy.v < 0x3F00)
+            {
+                static u8 ReadBuffer;
+                ReadValue = ReadBuffer;
+                ReadBuffer = NESPPU_ReadInternalMemory(PPU, Address);
+            }
+            else /* no buffered read for this addresses below 0x3F00 */
+            {
+                ReadValue = NESPPU_ReadInternalMemory(PPU, PPU->Loopy.v);
+            }
+            PPU->Loopy.v += (PPU->Ctrl & PPUCTRL_INC32)? 32 : 1;
+            return ReadValue;
+        } break;
         }
+
         return 0;
     }
     /* IO registers: DMA */
@@ -151,7 +206,7 @@ u8 Nes_ReadByte(void *UserData, u16 Address)
     {
         return NESCartridge_Read(sNes.Cartridge, Address);
     }
-    return 0;
+    return 0xEA;
 }
 
 static void Nes_ConnectCartridge(NESCartridge NewCartridge)
@@ -213,10 +268,7 @@ const char *Nes_ParseINESFile(const void *INESFile, isize FileSize)
     uint INESFileVersion = (Flag7 >> 2) & 0x3;
     switch (INESFileVersion)
     {
-    case 0: /* */
-    {
-        return "Unsupported iNes file version (0.7)";
-    } break;
+    case 0: /* iNes 0.7 */
     case 1: /* iNes */
     {
         NESCartridge Cartridge = NESCartridge_Init(
@@ -259,7 +311,7 @@ static int Nes_DisassembleAt(
     for (int ByteIndex = 0; ByteIndex < InstructionBuffer->ByteCount; ByteIndex++)
     {
         u8 Byte = Memory[
-            (InstructionBuffer->Address + ByteIndex) & (MemorySize - 1)
+            (InstructionBuffer->Address + ByteIndex) % MemorySize
         ];
         Length += FormatString(
             Ptr + Length, 
@@ -284,6 +336,11 @@ static int Nes_DisassembleAt(
         Length, 
         InstructionBuffer->String.Data
     );
+    while (Length < 28 && Length < SizeLeft)
+    {
+        Ptr[Length++] = ' ';
+    }
+    Ptr[Length] = '\0';
     return Length;
 }
 
@@ -312,7 +369,7 @@ static void Nes_Disassemble(
             int InstructionSize = DisassembleSingleOpcode(
                 &InstructionBuffer[i].String, 
                 CurrentPC,
-                &Memory[CurrentPC & (MemorySize - 1)],
+                &Memory[CurrentPC % MemorySize],
                 NES_CPU_RAM_SIZE - (CurrentPC % NES_CPU_RAM_SIZE)
             );
             if (-1 == InstructionSize)
@@ -380,12 +437,15 @@ Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(void)
         .B = MC6502_FlagGet(sCpu.Flags, FLAG_B),
         .D = MC6502_FlagGet(sCpu.Flags, FLAG_D),
     };
-    Nes_Disassemble(
-        Status.DisasmBeforePC, sizeof Status.DisasmBeforePC,
-        Status.DisasmAtPC, sizeof Status.DisasmAtPC,
-        Status.DisasmAfterPC, sizeof Status.DisasmAfterPC, 
-        Status.PC, sNes.Ram, NES_CPU_RAM_SIZE
-    );
+    if (sNes.Cartridge)
+    {
+        Nes_Disassemble(
+            Status.DisasmBeforePC, sizeof Status.DisasmBeforePC,
+            Status.DisasmAtPC, sizeof Status.DisasmAtPC,
+            Status.DisasmAfterPC, sizeof Status.DisasmAfterPC, 
+            Status.PC, sNes.Cartridge->Rom, sNes.Cartridge->RomSizeBytes
+        );
+    }
     return Status;
 }
 
@@ -411,13 +471,44 @@ void Nes_OnEntry(void)
     );
 }
 
-void Nes_OnLoop(void)
+
+
+static Bool8 Nes_StepClock(NES *Nes)
 {
-    sNesSystemClk++;
-    NESPPU_StepClock(&sPpu);
-    if (sNesSystemClk % 3 == 0)
+    Nes->Clk++;
+    Bool8 FrameCompleted = NESPPU_StepClock(Nes->PPU);
+    if (Nes->Clk % 3 == 0)
     {
-        MC6502_StepClock(&sCpu);
+        MC6502_StepClock(Nes->CPU);
+    }
+    return FrameCompleted;
+}
+
+
+void Nes_OnLoop(double ElapsedTime)
+{
+    static double ResidueTime = 1000.0/60.0;
+
+    if (sNesSystemSingleStepCPU)
+    {
+        if (sNes.Clk)
+        {
+            do {
+                Nes_StepClock(&sNes);
+            } while (sNes.CPU->CyclesLeft > 0);
+            sNes.Clk = 0;
+        }
+    }
+    else
+    {
+        if (ResidueTime < ElapsedTime)
+        {
+            ResidueTime += 1000.0 / 60.0;
+            Bool8 FrameCompleted = false;
+            do {
+                FrameCompleted = Nes_StepClock(&sNes);
+            } while (!FrameCompleted);
+        }
     }
 }
 
@@ -425,6 +516,26 @@ void Nes_AtExit(void)
 {
 }
 
+
+
+
+void Nes_OnEmulatorToggleHalt(void)
+{
+    sNesSystemSingleStepCPU = !sNesSystemSingleStepCPU;
+}
+
+void Nes_OnEmulatorSingleStep(void)
+{
+    sNesSystemSingleStepCPU = true;
+    sNes.Clk = 2;
+}
+
+void Nes_OnEmulatorReset(void)
+{
+    sNes.Clk = 0;
+    MC6502_Reset(&sCpu);
+    NESPPU_Reset(&sPpu);
+}
 
 
 

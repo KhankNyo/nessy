@@ -33,8 +33,12 @@ Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(void);
 /* returns NULL on success, or a static error string on failure (no lifetime) */
 const char *Nes_ParseINESFile(const void *FileBuffer, isize BufferSizeBytes);
 void Nes_OnEntry(void);
-void Nes_OnLoop(void);
+void Nes_OnLoop(double ElapsedTime);
 void Nes_AtExit(void);
+
+void Nes_OnEmulatorToggleHalt(void);
+void Nes_OnEmulatorReset(void);
+void Nes_OnEmulatorSingleStep(void);
 
 double Platform_GetTimeMillisec(void);
 

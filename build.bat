@@ -25,5 +25,5 @@ if "clean"=="%1" (
         -o bin\6502.exe src\6502.c src\Utils.c
     %CC% -o bin\Nessy.exe ^
         src\Win32.c src\Utils.c^
-        -lcomctl32 -lgdi32
+        -lcomctl32 -lgdi32 -lcomdlg32
 )
