@@ -81,18 +81,15 @@ MC6502 MC6502_Init(u16 PC, void *UserData, MC6502ReadByte ReadFn, MC6502WriteByt
         .CyclesLeft = 0,
     };
     MC6502_Reset(&This);
+    This.PC = PC;
     return This;
 }
 
+
+
 void MC6502_Reset(MC6502 *This)
 {
-    This->SP = 0xFD;
-    This->A = 0;
-    This->X = 0;
-    This->Y = 0;
-    This->CyclesLeft = 7;
-    This->Opcode = 0;
-    This->Halt = false;
+    MC6502_Interrupt(This, VEC_RES);
 }
 
 static u8 FetchByte(MC6502 *This)
@@ -364,7 +361,6 @@ static void SBC(MC6502 *This, u8 Value)
     }
 }
 
-
 static void FetchVector(MC6502 *This, u16 Vector)
 {
     This->PC = This->ReadByte(This->UserData, Vector++);
@@ -386,7 +382,13 @@ void MC6502_Interrupt(MC6502 *This, u16 InterruptVector)
 
     if (InterruptVector == VEC_RES)
     {
-        MC6502_Reset(This);
+        This->SP = 0xFD;
+        This->A = 0;
+        This->X = 0;
+        This->Y = 0;
+        This->CyclesLeft = 7;
+        This->Opcode = 0;
+        This->Halt = false;
     }
     else
     {
