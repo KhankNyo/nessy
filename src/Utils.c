@@ -23,12 +23,13 @@ Bool8 Memcmp(const void *A, const void *B, isize ByteCount)
 {
     const u8 *PtrA = A;
     const u8 *PtrB = B;
-    while (ByteCount --> 0 && *PtrA == *PtrB)
+    while (ByteCount > 0 && *PtrA == *PtrB)
     {
         PtrA++;
         PtrB++;
+        ByteCount--;
     }
-    return ByteCount == 0 || *PtrA == *PtrB;
+    return ByteCount == 0;
 }
 
 isize AppendString(char *Buffer, isize BufferSize, isize At, const char *String)
