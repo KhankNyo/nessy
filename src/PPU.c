@@ -10,20 +10,48 @@
 typedef struct NESPPU NESPPU;
 typedef void (*NESPPU_FrameCompletionCallback)(NESPPU *);
 
+/* CTRL */
+#define PPUCTRL_NAMETABLE_X     (1 << 0)
+#define PPUCTRL_NAMETABLE_Y     (1 << 1)
+#define PPUCTRL_INC32           (1 << 2) 
+#define PPUCTRL_SPR_PATTERN_ADDR (1 << 3) /* 0: $0000; 1: $1000 */
+#define PPUCTRL_BG_PATTERN_ADDR (1 << 4)  /* 0: $0000; 1: $1000 */
+#define PPUCTRL_SPR_SIZE        (1 << 5)  /* 0: 8x8  ; 1: 8x16  */
+#define PPUCTRL_SLAVE_MODE      (1 << 6)  /* unused */
+#define PPUCTRL_MNI_ENABLE      (1 << 7)
+/* STATUS */
+#define PPUSTATUS_SPR0_HIT      (1 << 5)
+#define PPUSTATUS_SPR_OVERFLOW  (1 << 6)
+#define PPUSTATUS_VBLANK        (1 << 7)
+/* MASK */
+#define PPUMASK_GRAYSCALE       (1 << 0)
+#define PPUMASK_SHOW_BG_LEFT    (1 << 1)
+#define PPUMASK_SHOW_SPR_LEFT   (1 << 2)
+#define PPUMASK_SHOW_BG         (1 << 3)
+#define PPUMASK_SHOW_SPR        (1 << 4)
+#define PPUMASK_EMPHASIZE_RED   (1 << 5)
+#define PPUMASK_EMPHASIZE_GREEN (1 << 6)
+#define PPUMASK_EMPHASIZE_BLUE  (1 << 7)
+
+
 struct NESPPU 
 {
     uint Clk;
     int Scanline;
     u32 ScreenIndex;
 
-    uint v:15;
-    uint t:15;
-    uint x:3;
-    uint w:1;
+    struct {
+        uint t:15;
+        uint v:15;
+        uint x:3;
+        uint w:1;
+    } Loopy;
+    u8 Ctrl;
+    u8 Mask;
+    u8 Status;
 
     u8 PaletteColorIndex[0x20];
-    u8 PatternTable[0x2000];
-    u8 NameAndAttributeTable[0x400];
+    u8 NameAndAttributeTable[0x800];
     u8 ObjectAttributeMemory[256];
 
     NESPPU_FrameCompletionCallback FrameCompletionCallback;
@@ -122,30 +150,46 @@ NESPPU NESPPU_Init(
         .FrameCompletionCallback = Callback,
         .CartridgeHandle = CartridgeHandle,
     };
+    for (uint i = 0; i < STATIC_ARRAY_SIZE(This.PaletteColorIndex); i++)
+    {
+        This.PaletteColorIndex[i] = i;
+    }
     srand(time(NULL));
     return This;
 }
 
-void NESPPU_StepClock(NESPPU *This)
+void NESPPU_Reset(NESPPU *This)
 {
+    (void)This;
+}
+
+Bool8 NESPPU_StepClock(NESPPU *This)
+{
+    Bool8 FrameCompleted = false;
     /* does the render, a single pixel */
-    u32 LookupValue = rand() * STATIC_ARRAY_SIZE(sPPURGBPalette) / RAND_MAX;
-    This->ScreenOutput[This->ScreenIndex] = sPPURGBPalette[LookupValue];
-    This->ScreenIndex++;
-    if (This->ScreenIndex >= NES_SCREEN_BUFFER_SIZE)
-        This->ScreenIndex = 0;
+    if (This->Clk < NES_SCREEN_WIDTH 
+    && This->Scanline < NES_SCREEN_HEIGHT)
+    {
+        u32 LookupValue = rand() * STATIC_ARRAY_SIZE(sPPURGBPalette) / RAND_MAX;
+        This->ScreenOutput[This->ScreenIndex] = sPPURGBPalette[LookupValue];
+        This->ScreenIndex++;
+        if (This->ScreenIndex >= NES_SCREEN_BUFFER_SIZE)
+            This->ScreenIndex = 0;
+    }
 
     This->Clk++;
-    if (This->Clk >= 341) /* PPU cycles per scanline */
+    if (This->Clk == 341) /* PPU cycles per scanline */
     {
         This->Clk = 0;
         This->Scanline++;
-        if (This->Scanline >= 261) /* last scanline */
+        if (This->Scanline == 261) /* last scanline */
         {
             This->Scanline = -1; /* -1 to wrap around later */
             This->FrameCompletionCallback(This);
+            FrameCompleted = true;
         }
     }
+    return FrameCompleted;
 }
 
 u8 NESPPU_ReadInternalMemory(NESPPU *This, u16 Address)
