@@ -54,7 +54,7 @@ NESMapperInterface *NESMapperInterface_Init(
     Mapper000->Base.ChrRomSize = ChrRomSize;
 
     Memcpy(Mapper000->Base.PrgRom, PrgRom, PrgRomSize);
-    Memcpy(Mapper000->Base.ChrRom, ChrRom, PrgRomSize);
+    Memcpy(Mapper000->Base.ChrRom, ChrRom, ChrRomSize);
     return (NESMapperInterface *)Mapper000;
 }
 
