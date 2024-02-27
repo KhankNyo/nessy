@@ -20,10 +20,12 @@ void NESCartridge_Destroy(NESCartridge *Cartridge)
 NESCartridge NESCartridge_Init(
     const void *PrgRom, isize PrgRomSize, 
     const void *ChrRom, isize ChrRomSize, 
-    u8 MapperID)
+    u8 MapperID, 
+    NESNametableOrientation MirroringMode)
 {
     NESCartridge Cartridge = {
         .RomSizeBytes = PrgRomSize + ChrRomSize,
+        .MirroringMode = MirroringMode,
     };
     /* create memory for both prg and chr rom */
     Cartridge.Rom = malloc(Cartridge.RomSizeBytes);

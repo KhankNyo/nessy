@@ -235,6 +235,7 @@ const char *Nes_ParseINESFile(const void *INESFile, isize FileSize)
     {
         return "Unrecognized file format";
     }
+    /* TODO: verify rom size before reading */
 
     const u8 *FileDataStart = BytePtr + 16;
     BytePtr += 4;
@@ -248,11 +249,10 @@ const char *Nes_ParseINESFile(const void *INESFile, isize FileSize)
     if (Flag6 & (1 << 3)) /* alternate nametable layout */
     {
     }
+    NESNametableOrientation NametableOrientation = NAMETABLE_HORIZONTAL;
     if (Flag6 & (1 << 0)) /* name table vertical */
     {
-    }
-    else /* name table horizontal */
-    {
+        NametableOrientation = NAMETABLE_VERTICAL;
     }
 
     if (Flag6 & (1 << 1)) /* battery packed ram available (aka SRAM, or WRAM) */
@@ -268,19 +268,21 @@ const char *Nes_ParseINESFile(const void *INESFile, isize FileSize)
     uint INESFileVersion = (Flag7 >> 2) & 0x3;
     switch (INESFileVersion)
     {
+    /* most of the info we need are the same accross different version anyway */
     case 0: /* iNes 0.7 */
     case 1: /* iNes */
+    case 2: /* iNes 2.0 */
     {
         NESCartridge Cartridge = NESCartridge_Init(
             FilePrgRom, PrgRomSize, 
             FileChrRom, ChrRomSize, 
-            MapperID
+            MapperID, NametableOrientation
         );
         Nes_ConnectCartridge(Cartridge);
     } break;
-    case 2: /* iNes 2.0 */
+    default:
     {
-        return "Unsupported iNes file version (2.0)";
+        return "Unknown iNes file version";
     } break;
     }
     return NULL;

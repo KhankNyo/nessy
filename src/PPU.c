@@ -167,6 +167,7 @@ Bool8 NESPPU_StepClock(NESPPU *This)
 {
     Bool8 FrameCompleted = false;
     /* does the render, a single pixel */
+#if 0
     if (This->Clk < NES_SCREEN_WIDTH 
     && This->Scanline < NES_SCREEN_HEIGHT)
     {
@@ -176,6 +177,8 @@ Bool8 NESPPU_StepClock(NESPPU *This)
         if (This->ScreenIndex >= NES_SCREEN_BUFFER_SIZE)
             This->ScreenIndex = 0;
     }
+#else 
+#endif /* */
 
     This->Clk++;
     if (This->Clk == 341) /* PPU cycles per scanline */
@@ -192,6 +195,40 @@ Bool8 NESPPU_StepClock(NESPPU *This)
     return FrameCompleted;
 }
 
+
+static NESNametableOrientation NESPPU_GetMirroringModeFromCartridge(NESCartridge **CartridgeHandle)
+{
+    if (!CartridgeHandle || !*CartridgeHandle)
+        return NAMETABLE_VERTICAL;
+
+    return (*CartridgeHandle)->MirroringMode;
+}
+
+static u16 NESPPU_MirrorNametableAddr(u16 LogicalAddress, NESNametableOrientation MirroringMode)
+{
+    u16 PhysicalAddress = 0;
+    switch (MirroringMode)
+    {
+    case NAMETABLE_VERTICAL: 
+    {
+        PhysicalAddress = LogicalAddress & 0x07FF;
+    } break;
+    case NAMETABLE_HORIZONTAL:
+    {
+        PhysicalAddress = LogicalAddress & 0x0FFF;
+        PhysicalAddress = PhysicalAddress > 0x0800?
+            ((PhysicalAddress & 0x3FF) + 0x400)
+            :(PhysicalAddress & 0x3FF);
+    } break;
+    case NAMETABLE_ONESCREEN_HI:
+    case NAMETABLE_ONESCREEN_LO:
+    {
+        DEBUG_ASSERT(false && "TODO: one screen mirroring");
+    } break;
+    }
+    return PhysicalAddress;
+}
+
 u8 NESPPU_ReadInternalMemory(NESPPU *This, u16 Address)
 {
     Address &= 0x3FFF;
@@ -206,7 +243,8 @@ u8 NESPPU_ReadInternalMemory(NESPPU *This, u16 Address)
     /* NOTE: PPU VRAM, but cartridge can also hijack these addresses through mappers */
     else if (IN_RANGE(0x2000, Address, 0x3EFF)) 
     {
-        Address %= 0x400;
+        NESNametableOrientation MirroringMode = NESPPU_GetMirroringModeFromCartridge(This->CartridgeHandle);
+        Address = NESPPU_MirrorNametableAddr(Address, MirroringMode);
         return This->NameAndAttributeTable[Address];
     }
     else /* 0x3F00-0x3FFF: sprite palette, image palette */
@@ -230,7 +268,8 @@ void NESPPU_WriteInternalMemory(NESPPU *This, u16 Address, u8 Byte)
     /* NOTE: PPU VRAM, but cartridge can also hijack these addresses thorugh mappers */
     else if (IN_RANGE(0x2000, Address, 0x3EFF)) 
     {
-        Address %= 0x400;
+        NESNametableOrientation MirroringMode = NESPPU_GetMirroringModeFromCartridge(This->CartridgeHandle);
+        Address = NESPPU_MirrorNametableAddr(Address, MirroringMode);
         This->NameAndAttributeTable[Address] = Byte;
     }
     else /* 0x3F00-0x3FFF: sprite palette, image palette */
