@@ -21,8 +21,12 @@ NESCartridge NESCartridge_Init(
     const void *PrgRom, isize PrgRomSize, 
     const void *ChrRom, isize ChrRomSize, 
     u8 MapperID, 
-    NESNametableOrientation MirroringMode)
+    NESNameTableMirroring MirroringMode)
 {
+    /* if no ChrRom, use ChrRam */
+    if (ChrRomSize == 0)
+        ChrRomSize = 8 * 1024;
+
     NESCartridge Cartridge = {
         .RomSizeBytes = PrgRomSize + ChrRomSize,
         .MirroringMode = MirroringMode,

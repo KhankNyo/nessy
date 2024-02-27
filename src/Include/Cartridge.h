@@ -3,18 +3,18 @@
 
 #include "MapperInterface.h"
 
-typedef enum NESNametableOrientation 
+typedef enum NESNameTableMirroring 
 {
     NAMETABLE_HORIZONTAL,
     NAMETABLE_VERTICAL,
     NAMETABLE_ONESCREEN_HI,
     NAMETABLE_ONESCREEN_LO,
-} NESNametableOrientation;
+} NESNameTableMirroring;
 typedef struct NESCartridge
 {
     void *Rom;
     isize RomSizeBytes;
-    NESNametableOrientation MirroringMode;
+    NESNameTableMirroring MirroringMode;
     NESMapperInterface *MapperInterface;
 } NESCartridge;
 
@@ -24,7 +24,7 @@ NESCartridge NESCartridge_Init(
     const void *PrgRom, isize PrgRomSize, 
     const void *ChrRom, isize ChrRomSize, 
     u8 MapperID, 
-    NESNametableOrientation MirroringMode
+    NESNameTableMirroring MirroringMode
 );
 u8 NESCartridge_Read(NESCartridge *Cartridge, u16 Address);
 void NESCartridge_Write(NESCartridge *Cartridge, u16 Address, u8 Byte);
