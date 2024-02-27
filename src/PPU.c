@@ -335,7 +335,7 @@ Bool8 NESPPU_StepClock(NESPPU *This)
             {
                 u16 AttrTableBase = 0x03C0;
                 u16 NameTableSelects = This->Loopy.v & 0x0C00;      /* nametable select bits */
-                u16 CoarseX = (This->Loopy.v & 0x01F0) >> (0 + 2);  /* upper 3 bits of coarse-x */
+                u16 CoarseX = (This->Loopy.v & 0x001F) >> (0 + 2);  /* upper 3 bits of coarse-x */
                 u16 CoarseY = (This->Loopy.v & 0x03E0) >> (2 + 2);  /* upper 3 bits of coarse-y */
                 /* AttrByteAddr should be:
                  * msb           lsb
@@ -350,7 +350,18 @@ Bool8 NESPPU_StepClock(NESPPU *This)
                     | NameTableSelects
                     | CoarseX 
                     | CoarseY;
-                This->AttrTableByteLatch = NESPPU_ReadInternalMemory(This, AttrTableByteAddr);
+                u8 AttrByte = NESPPU_ReadInternalMemory(This, AttrTableByteAddr);
+
+                /* bit select: 
+                 * bit 1 of CoarseX determines 0 or 2
+                 * bit 1 of CoarseY determines 0 or 4
+                 * the sum of those determines the bit offset (0, 2, 4, 6)
+                 * */
+                uint BitSelect = 
+                    (This->Loopy.v & 0x2)                   /* bit 1 of CoarseX, value of 0 or 2 */
+                    + ((This->Loopy.v & (1 << 6)) >> 4);    /* bit 1 of CoarseY, value of 0 or 4 */
+
+                This->AttrTableByteLatch = (AttrByte >> BitSelect) & 0x3;
             } break;
             /* read pattern table low
              * using the byte from the NameTable a few cycles earlier */
@@ -384,6 +395,12 @@ Bool8 NESPPU_StepClock(NESPPU *This)
             /* prepare v to fetch next NameTable and AttrTable */
             case 7:
             {
+                if (!(This->Ctrl & PPUMASK_SHOW_BG) 
+                && !(This->Mask & PPUMASK_SHOW_SPR))
+                {
+                    break;
+                }
+
                 /* coarse-x inc: */
                 u16 NewCoarseX = ((This->Loopy.v & 0x1F) + 1) & 0x1F;
                 This->Loopy.v ^= (NewCoarseX == 0) << 10;   /* flip nametable-x bit only if CoarseX carries */
