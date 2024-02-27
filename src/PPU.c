@@ -293,6 +293,7 @@ Bool8 NESPPU_StepClock(NESPPU *This)
     /* visible scanlines (rendering) */
     if (IN_RANGE(0, This->Scanline, 239))
     {
+        u16 NameTableOffset = 0x2000;
         /* idle or something?? */
         if (This->Clk == 0) 
         {
@@ -303,7 +304,6 @@ Bool8 NESPPU_StepClock(NESPPU *This)
               || IN_RANGE(321, This->Clk, 336)
         )
         {
-            u16 NameTableOffset = 0x2000;
             NESPPU_UpdateShifters(This);
 
             /* basically a state machine */
@@ -318,99 +318,39 @@ Bool8 NESPPU_StepClock(NESPPU *This)
                     NESPPU_ReloadShifters(This);
                 }
 
-                /* 0x0FFF: 12 bit addr containing: 
-                 *  nametable-y 
-                 *  nametable-x 
-                 *  coarse-y 
-                 *  coarse-x
-                 * is the index into a nametable byte */
+                /* 
+                 * 0x0FFF: 12 bit addr containing: 
+                 * msb          lsb
+                 * NN yyyyy xxxxx
+                 * ^^--------------- nametable y, x respectively
+                 *    ^^^^^--------- CoarseY
+                 *          ^^^^^--- CoarseX
+                 * is the index into a nametable byte 
+                 */
                 u16 NameTableAddr = NameTableOffset + (This->Loopy.v & 0x0FFF);
                 This->NameTableByteLatch = NESPPU_ReadInternalMemory(This, NameTableAddr);
             } break;
             /* fetch Attribute Table byte */
             case 2:
             {
-                /* 
-                 *  A corresponding tile pointed to by the nametable byte:
-                 *  #############
-                 *  #  |  #  |  #
-                 *  #--0--#--1--#    <-+
-                 *  #  |  #  |  #      |
-                 *  #############      +-- note the numbers: the 4 tiles (squares) surround those numbers  
-                 *  #  |  #  |  #      |                     share that number from the 2-bit portions of the attr byte
-                 *  #--2--#--3--#    <-+
-                 *  #  |  #  |  #
-                 *  #############
-                 *  has corresponding attr byte:
-                 *             msb    lsb
-                 *  attr byte: 33221100  
-                 *
-                 *
-                 * NOTE: to follow this explanation, get a paper and pencil and draw these out 
-                 *      or watch Javid9x's video, 
-                 *      whatever you do, don't use the NesDev docs
-                 *
-                 *
-                 * because the x-span of a 4x4 tile region is 4 
-                 * and 2 consecutive tiles (in the x-direction, and the consecutive tile pairs cannot overlap) 
-                 * use the same 2 bits in lower nibble of the attr byte:
-                 *
-                 *    offset of attr byte   =  (x offset of nametable byte) / 4         (fetch 1 attr byte for 4 nametable bytes)
-                 *
-                 *    offset of attr bit    = ((x offset of nametable byte) / 2) % 2
-                 *                          now we got either 0 or 1, but since we use bit pairs (index of 0 or 2), 
-                 *                          we need to multiply it by 2
-                 *                          = ((         coarseX          ) / 2) % 2 * 2 
-                 *                          = ((         coarseX          ) % 4) / 2 * 2 (equivalent to the above)
-                 *                          NOTE: because this is integer division,     x/2 * 2     != x
-                 *                                                                  ((x >> 1) << 1) != x
-                 *                          so instead of simplifying x/2*2, we simply check bit 1
-                 *                          = ((         coarseX          ) % 4) & 0x02   
-                 *                          if bit 1 is on, we get a 2, 
-                 *                          else we get 0
-                 *                          this is exactly what we want
-                 *
-                 *    => offset of attr byte = coarseX/4
-                 *    => offset of attr bit  = (coarseX % 4) & 0x2
-                 * NOTE: offset of attr bit is only 0 or 2, so we're missing 4 and 6
-                 *    to get 4 or 6, we need to calculate a bit offset of either 0 or 4 from coarseY of the nametable byte, 
-                 *    add that offset to the one from coarseX and we're done
-                 *
-                 * because the y-span of a 4x4 tile region is 4, 
-                 * and 2 consecutive scanlines of tiles use the same 2 bits in the attr byte:
-                 *    extra offset of attr bit  =  ((y offset of nametable byte) / 2) % 2
-                 *                              =  ((          coarseY         ) % 4) / 2
-                 *                              now we got 0 or 1, multiply by 4 to get 0 or 4
-                 *                              =  ((          coarseY         ) % 4) / 2 * 4
-                 *                              simplify
-                 *                              =  ((          coarseY         ) % 4) / 2 * 2 * 2
-                 *                              = (((          coarseY         ) % 4) & 0x2) * 2
-                 *                              so now if bit 1 is on, we get 2*2 = 4
-                 *                              else we get 0
-                 * Results:
-                 *    => offset of attr bit  = 
-                 *       ((CoarseX % 4) & 0x02) 
-                 *       + ((CoarseY % 4) & 0x02) * 2
-                 *    => offset of attr byte = 
-                 *       CoarseX/4
-                 * */
-
-                u16 AttrTableBase = 0x23C0;
-
-                /* find byte offset */
-                u16 CoarseX = (This->Loopy.v & 0x1F);
-                u16 AttrByteOffset = CoarseX / 4;
-
-                u16 AttrTableAddr = AttrTableBase + AttrByteOffset;
-                u8 AttrTableByte = NESPPU_ReadInternalMemory(This, AttrTableAddr);
-
-                /* find bit offset */
-                u16 CoarseY = (This->Loopy.v >> 5) & 0x1F;
-                uint BitOffset = (CoarseX % 4) & 0x2;
-                BitOffset += ((CoarseY % 4) & 0x2)*2;
-
-                /* only care about 2 bits in the byte */
-                This->AttrTableByteLatch = (AttrTableByte >> BitOffset) & 0x3;
+                u16 AttrTableBase = 0x03C0;
+                u16 NameTableSelects = This->Loopy.v & 0x0C00;      /* nametable select bits */
+                u16 CoarseX = (This->Loopy.v & 0x01F0) >> (0 + 2);  /* upper 3 bits of coarse-x */
+                u16 CoarseY = (This->Loopy.v & 0x03E0) >> (2 + 2);  /* upper 3 bits of coarse-y */
+                /* AttrByteAddr should be:
+                 * msb           lsb
+                 * NN 1111 yyy xxx
+                 * ^^------------------ nametable y, x respectively
+                 *    ^^^^------------- 0x03C0 AttrTable offset
+                 *         ^^^--------- (CoarseY >> 2)
+                 *             ^^^----- (CoarseX >> 2)
+                 */
+                u16 AttrTableByteAddr = 
+                    (AttrTableBase + NameTableOffset)
+                    | NameTableSelects
+                    | CoarseX 
+                    | CoarseY;
+                This->AttrTableByteLatch = NESPPU_ReadInternalMemory(This, AttrTableByteAddr);
             } break;
             /* read pattern table low
              * using the byte from the NameTable a few cycles earlier */
@@ -444,7 +384,18 @@ Bool8 NESPPU_StepClock(NESPPU *This)
             /* prepare v to fetch next NameTable and AttrTable */
             case 7:
             {
-                This->Loopy.v++;
+                /* coarse-x inc: */
+                u16 NewCoarseX = ((This->Loopy.v & 0x1F) + 1) & 0x1F;
+                This->Loopy.v ^= (NewCoarseX == 0) << 10;   /* flip nametable-x bit only if CoarseX carries */
+
+                /* coarse-y inc: */
+                u16 NewCoarseY = ((This->Loopy.v & 0x03E0) + (1 << 5)) & 0x03E0;
+                This->Loopy.v ^= ((NewCoarseY == 30) << 11); /* flip nametable-y bit only if CoarseY was 29 */
+
+                This->Loopy.v = 
+                    (This->Loopy.v & ~(0x03FF)) 
+                    | (NewCoarseX & 0x001F)   /* reload CoarseX */
+                    | (NewCoarseY & 0x03E0);  /* reload CoarseY */
             } break;
             }
         }
@@ -452,10 +403,11 @@ Bool8 NESPPU_StepClock(NESPPU *This)
         else if (IN_RANGE(257, This->Clk, 320))
         {
         }
-        /* dummy fetch, but mappers like MMC5 are sensitive to it */
+        /* dummy last fetches, but mappers like MMC5 are sensitive to it */
         else if (This->Clk == 337 || This->Clk == 339)
         {
-            NESPPU_ReadInternalMemory(This, This->Loopy.v);
+            u16 NameTableAddr = NameTableOffset + (This->Loopy.v & 0x0FFF);
+            NESPPU_ReadInternalMemory(This, NameTableAddr);
         }
     }
     /* vblank begins */
