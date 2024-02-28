@@ -25,9 +25,9 @@ typedef struct NES
 
 
 static NESCartridge sConnectedCartridge;
-static u32 sScreenBuffers[NES_SCREEN_WIDTH * NES_SCREEN_HEIGHT * 2];
-static u32 *sBackBuffer = &sScreenBuffers[0];
-static u32 *sReadyBuffer = &sScreenBuffers[1];
+static u32 sScreenBuffers[2][NES_SCREEN_WIDTH * NES_SCREEN_HEIGHT];
+static u32 *sBackBuffer = sScreenBuffers[0];
+static u32 *sReadyBuffer = sScreenBuffers[1];
 
 
 static Bool8 sNesSystemSingleStepCPU = false;
