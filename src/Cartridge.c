@@ -23,9 +23,13 @@ NESCartridge NESCartridge_Init(
     u8 MapperID, 
     NESNameTableMirroring MirroringMode)
 {
-    /* if no ChrRom, use ChrRam */
     if (ChrRomSize == 0)
+    {
         ChrRomSize = 8 * 1024;
+        /* TODO: better way to do this, this is a hack */
+        ChrRom = PrgRom;
+        DEBUG_ASSERT("no chr rom");
+    }
 
     NESCartridge Cartridge = {
         .RomSizeBytes = PrgRomSize + ChrRomSize,

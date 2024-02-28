@@ -31,6 +31,7 @@ static u32 *sReadyBuffer = &sScreenBuffers[1];
 
 
 static Bool8 sNesSystemSingleStepCPU = false;
+static Bool8 sNesSystemSingleStepFrame = false;
 static NES sNes = {
     .Cartridge = NULL,
     .Ram = { 0 },
@@ -57,9 +58,8 @@ static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
         case PPU_CTRL:
         {
             PPU->Ctrl = Byte;
-            PPU->Loopy.t = 
-                (PPU->Loopy.t & ~0x0C00) 
-                | (((u16)Byte << 10) & 0x0C00);
+            u16 NametableBits = (u16)Byte << 10;
+            MASKED_LOAD(PPU->Loopy.t, NametableBits, 0x0C00);
         } break;
         case PPU_MASK: PPU->Mask = Byte; break;
         case PPU_STATUS: /* write not allowed */ break;
@@ -70,16 +70,14 @@ static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
             if (PPU->Loopy.w++ == 0) /* first write */
             {
                 PPU->Loopy.x = Byte;
-                PPU->Loopy.t = 
-                    (PPU->Loopy.t & ~0x1F)
-                    | (Byte >> 3);
+                MASKED_LOAD(PPU->Loopy.t, Byte >> 3, 0x1F);
             }
             else /* second write */
             {
-                PPU->Loopy.t = 
-                    (PPU->Loopy.t & ~0x0CE0)
-                    | ((u16)Byte << 12)
-                    | (((u16)Byte & 0xF8) << 5);
+                u16 FineY = (u16)Byte << 12;
+                u16 CoarseY = (Byte >> 3) << 5;
+                MASKED_LOAD(PPU->Loopy.t, FineY, 0x7000);
+                MASKED_LOAD(PPU->Loopy.t, CoarseY, 0x03E0);
             }
         } break;
         case PPU_ADDR:
@@ -87,16 +85,13 @@ static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
             /* latching because each cpu cycle is 3 ppu cycles */
             if (PPU->Loopy.w++ == 0) /* first write */
             {
-                Byte &= 0x3F; /* clear 2 topmost bits */
-                PPU->Loopy.t = 
-                    (PPU->Loopy.t & 0x00FF) 
-                    | ((u16)Byte << 8);
+                Byte &= 0x3F;
+                u16 AddrHi = (u16)Byte << 8;
+                MASKED_LOAD(PPU->Loopy.t, AddrHi, 0xFF00);
             }
             else /* second write */
             {
-                PPU->Loopy.t = 
-                    (PPU->Loopy.t & 0x7F00)
-                    | Byte;
+                MASKED_LOAD(PPU->Loopy.t, Byte, 0x00FF);
                 PPU->Loopy.v = PPU->Loopy.t;
             }
         } break;
@@ -150,7 +145,7 @@ static u8 NesInternal_ReadByte(void *UserData, u16 Address)
             u8 Status = PPU->Status; 
             PPU->Status &= ~PPUSTATUS_VBLANK;
             PPU->Loopy.w = 0;
-            return Status | PPUSTATUS_VBLANK;
+            return Status;
         } break;
         case PPU_OAM_ADDR: /* read not allowed */ break;
         case PPU_OAM_DATA:
@@ -392,6 +387,15 @@ void Nes_OnLoop(double ElapsedTime)
             sNes.Clk = 0;
         }
     }
+    else if (sNesSystemSingleStepFrame)
+    {
+        if (sNes.Clk)
+        {
+            do {
+            } while (!Nes_StepClock(&sNes));
+            sNes.Clk = 0;
+        }
+    }
     else
     {
         if (ResidueTime < ElapsedTime)
@@ -415,12 +419,21 @@ void Nes_AtExit(void)
 void Nes_OnEmulatorToggleHalt(void)
 {
     sNesSystemSingleStepCPU = !sNesSystemSingleStepCPU;
+    sNesSystemSingleStepFrame = false;
 }
 
 void Nes_OnEmulatorSingleStep(void)
 {
     sNesSystemSingleStepCPU = true;
+    sNesSystemSingleStepFrame = false;
     sNes.Clk = 2;
+}
+
+void Nes_OnEmulatorSingleFrame(void)
+{
+    sNesSystemSingleStepCPU = false;
+    sNesSystemSingleStepFrame = true;
+    sNes.Clk = 1;
 }
 
 void Nes_OnEmulatorReset(void)

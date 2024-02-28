@@ -487,6 +487,10 @@ static LRESULT CALLBACK Win32_MainWndProc(HWND Window, UINT Msg, WPARAM WParam, 
         {
             Nes_OnEmulatorReset();
         } break;
+        case 'F':
+        {
+            Nes_OnEmulatorSingleFrame();
+        } break;
         case VK_SPACE:
         {
             Nes_OnEmulatorSingleStep();

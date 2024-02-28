@@ -29,6 +29,8 @@ typedef struct SmallString {
 #define STRFY(x) strfy_(x)
 
 #define BYTE_ARRAY(...) (u8[]){__VA_ARGS__}
+#define MASKED_LOAD(AssginableDst, Expr, ExprMask) \
+    (AssginableDst = ((AssginableDst) & ~(ExprMask)) | ((Expr) & (ExprMask)))
 
 
 #ifdef DEBUG

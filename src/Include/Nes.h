@@ -39,6 +39,7 @@ void Nes_AtExit(void);
 void Nes_OnEmulatorToggleHalt(void);
 void Nes_OnEmulatorReset(void);
 void Nes_OnEmulatorSingleStep(void);
+void Nes_OnEmulatorSingleFrame(void);
 
 double Platform_GetTimeMillisec(void);
 
