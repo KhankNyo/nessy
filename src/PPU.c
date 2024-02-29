@@ -201,17 +201,30 @@ static u16 NESPPU_MirrorNameTableAddr(NESCartridge **CartridgeHandle, u16 Logica
     {
     case NAMETABLE_VERTICAL: 
     {
-        if (IN_RANGE(0x0000, LogicalAddress, 0x03FF) || IN_RANGE(0x0800, LogicalAddress, 0x0BFF))
-            PhysicalAddress = LogicalAddress & 0x03FF;
-        else if (IN_RANGE(0x0400, LogicalAddress, 0x07FF) || IN_RANGE(0x0C00, LogicalAddress, 0x0FFF))
-            PhysicalAddress = (LogicalAddress & 0x03FF) + 0x0400;
+        /*
+         * Logical:
+         * 0x0000 ---- 0x0400 ---- 0x0800 ---- 0x0C00 ---- 0x1000 
+         *    |     0     |     1     |     2     |     3     |
+         *    *-----------*-----------*-----------*-----------*
+         * Physical:
+         *    |     0     |     1     |     0     |     1     |
+         *    *-----------*-----------*-----------*-----------*
+         */
+        PhysicalAddress = LogicalAddress & 0x07FF;
     } break;
     case NAMETABLE_HORIZONTAL:
     {
-        if (IN_RANGE(0x0000, LogicalAddress, 0x07FF))
-            PhysicalAddress = LogicalAddress & 0x03FF;
-        else if (IN_RANGE(0x0800, LogicalAddress, 0x0FFF))
-            PhysicalAddress = (LogicalAddress & 0x03FF) + 0x0400;
+        /*
+         * Logical:
+         * 0x0000 ---- 0x0400 ---- 0x0800 ---- 0x0C00 ---- 0x1000 
+         *    |     0     |     1     |     2     |     3     |
+         *    *-----------*-----------*-----------*-----------*
+         * Physical:
+         *    |     0     |     0     |     1     |     1     |
+         *    *-----------*-----------*-----------*-----------*
+         */
+        u16 NametableSelect = (LogicalAddress & 0x0800) >> 1; /* bit 12 determines the nametable */
+        PhysicalAddress = (LogicalAddress & 0x03FF) + NametableSelect;
     } break;
     case NAMETABLE_ONESCREEN_HI:
     case NAMETABLE_ONESCREEN_LO:
