@@ -27,6 +27,10 @@ typedef struct Platform_FrameBuffer
     u32 Width, Height;
 } Platform_FrameBuffer;
 
+typedef u16 Nes_ControllerStatus;
+
+
+
 Platform_FrameBuffer Nes_PlatformQueryFrameBuffer(void);
 Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(void);
 
@@ -42,6 +46,7 @@ void Nes_OnEmulatorSingleStep(void);
 void Nes_OnEmulatorSingleFrame(void);
 
 double Platform_GetTimeMillisec(void);
+Nes_ControllerStatus Platform_GetControllerState(void);
 
 
 #endif /* NES_H */

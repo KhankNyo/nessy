@@ -636,3 +636,26 @@ double Platform_GetTimeMillisec(void)
     return (double)Now.QuadPart * sWin32_TimerFrequency;
 }
 
+Nes_ControllerStatus Platform_GetControllerState(void)
+{
+    u16 Left = GetKeyState('A') < 0 || GetKeyState(VK_LEFT) < 0; 
+    u16 Right = GetKeyState('D') < 0 || GetKeyState(VK_RIGHT) < 0;
+    u16 Up = GetKeyState('W') < 0 || GetKeyState(VK_UP) < 0;
+    u16 Down = GetKeyState('S') < 0 || GetKeyState(VK_DOWN) < 0;
+    u16 Start = GetKeyState(VK_RETURN) < 0;
+    u16 Select = GetKeyState(VK_TAB) < 0;
+    u16 A = GetKeyState('K') < 0;
+    u16 B = GetKeyState('J') < 0;
+
+    Nes_ControllerStatus ControllerStatus = 
+        (A << 0)
+        | (B << 1)
+        | (Select << 2) 
+        | (Start << 3) 
+        | (Up << 4) 
+        | (Down << 5) 
+        | (Left << 6) 
+        | (Right << 7);
+    return ControllerStatus;
+}
+

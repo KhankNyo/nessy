@@ -21,6 +21,7 @@ typedef struct NES
     NESPPU PPU;
 
     u8 Ram[NES_CPU_RAM_SIZE];
+    u16 ControllerStatusBuffer;
 } NES;
 
 
@@ -52,6 +53,12 @@ static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
     else if (IN_RANGE(0x2000, Address, 0x3FFF))
     {
         NESPPU_ExternalWrite(&Nes->PPU, Address & 0x07, Byte);
+    }
+    /* controller capture */
+    else if (Address == 0x4016)
+    {
+        Nes->ControllerStatusBuffer = Platform_GetControllerState();
+        Nes->ControllerStatusBuffer |= 0xFF00;
     }
     /* IO registers: DMA */
     else if (IN_RANGE(0x4000, Address, 0x401F))
@@ -86,6 +93,13 @@ static u8 NesInternal_ReadByte(void *UserData, u16 Address)
     else if (IN_RANGE(0x2000, Address, 0x3FFF))
     {
         return NESPPU_ExternalRead(&Nes->PPU, Address & 0x07);
+    }
+    /* get controller status */
+    else if (Address == 0x4017 || Address == 0x4016)
+    {
+        u8 ButtonStatus = Nes->ControllerStatusBuffer & 0x1;
+        Nes->ControllerStatusBuffer >>= 1;
+        return ButtonStatus;
     }
     /* IO registers: DMA */
     else if (IN_RANGE(0x4000, Address, 0x401F))
