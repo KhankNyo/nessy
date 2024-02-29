@@ -32,6 +32,12 @@ typedef void (*NESPPU_NmiCallback)(NESPPU *);
 #define PPUMASK_EMPHASIZE_BLUE  (1 << 7)
 
 
+#define COARSE_X_MASK 0x001F
+#define COARSE_Y_MASK 0x03E0
+#define NAMETABLE_OFFSET 0x2000
+#define FINE_Y_MASK 0x7000
+
+
 struct NESPPU 
 {
     uint Clk;
@@ -50,6 +56,7 @@ struct NESPPU
     u8 Status;
     Bool8 CurrentFrameIsOdd;
 
+
     u8 NameTableByteLatch;
     u8 AttrBitsLatch;
     u8 PatternLoLatch;
@@ -59,6 +66,8 @@ struct NESPPU
     u16 PatternLoShifter;
     u16 AttrHiShifter;
     u16 AttrLoShifter;
+
+    u8 ReadBuffer;
 
 
     u8 PaletteColorIndex[0x20];
@@ -215,7 +224,7 @@ static u16 NESPPU_MirrorNameTableAddr(NESCartridge **CartridgeHandle, u16 Logica
 
 
 
-u8 NESPPU_ReadInternalMemory(NESPPU *This, u16 Address)
+static u8 NESPPU_ReadInternalMemory(NESPPU *This, u16 Address)
 {
     Address &= 0x3FFF;
     /* CHR ROM memory from the cartridge */
@@ -242,7 +251,7 @@ u8 NESPPU_ReadInternalMemory(NESPPU *This, u16 Address)
     }
 }
 
-void NESPPU_WriteInternalMemory(NESPPU *This, u16 Address, u8 Byte)
+static void NESPPU_WriteInternalMemory(NESPPU *This, u16 Address, u8 Byte)
 {
     Address &= 0x3FFF;
     /* CHR ROM memory from the cartridge */
@@ -266,6 +275,100 @@ void NESPPU_WriteInternalMemory(NESPPU *This, u16 Address, u8 Byte)
         if ((Address & 0x0003) == 0)
             Address &= 0xF;
         This->PaletteColorIndex[Address] = Byte;
+    }
+}
+
+
+
+
+u8 NESPPU_ExternalRead(NESPPU *This, u16 Address)
+{
+    switch ((NESPPU_CtrlReg)Address)
+    {
+    case PPU_CTRL: /* read not allowed */ break;
+    case PPU_MASK: /* read not allowed */ break;
+    case PPU_STATUS: 
+    {
+        u8 Status = This->Status; 
+        This->Status &= ~PPUSTATUS_VBLANK;
+        This->Loopy.w = 0;
+        return Status;
+    } break;
+    case PPU_OAM_ADDR: /* read not allowed */ break;
+    case PPU_OAM_DATA:
+    {
+    } break;
+    case PPU_SCROLL: /* read not allowed */ break;
+    case PPU_ADDR: /* read not allowed */ break;
+    case PPU_DATA:
+    {
+        u8 ReadValue;
+        /* read is buffered */
+        if (This->Loopy.v < 0x3F00)
+        {
+            ReadValue = This->ReadBuffer;
+            This->ReadBuffer = NESPPU_ReadInternalMemory(This, Address);
+        }
+        else /* no buffered read for this addresses below 0x3F00 */
+        {
+            ReadValue = NESPPU_ReadInternalMemory(This, This->Loopy.v);
+        }
+        This->Loopy.v += (This->Ctrl & PPUCTRL_INC32)? 32 : 1;
+        return ReadValue;
+    } break;
+    }
+    return 0;
+}
+
+void NESPPU_ExternalWrite(NESPPU *This, u16 Address, u8 Byte)
+{
+    switch ((NESPPU_CtrlReg)Address)
+    {
+    case PPU_CTRL:
+    {
+        This->Ctrl = Byte;
+        u16 NametableBits = (u16)Byte << 10;
+        MASKED_LOAD(This->Loopy.t, NametableBits, 0x0C00);
+    } break;
+    case PPU_MASK: This->Mask = Byte; break;
+    case PPU_STATUS: /* write not allowed */ break;
+    case PPU_OAM_ADDR:
+    case PPU_OAM_DATA:
+    case PPU_SCROLL: 
+    {
+        if (This->Loopy.w++ == 0) /* first write */
+        {
+            This->Loopy.x = Byte;
+            MASKED_LOAD(This->Loopy.t, Byte >> 3, 0x1F);
+        }
+        else /* second write */
+        {
+            u16 FineY = (u16)Byte << 12;
+            u16 CoarseY = (Byte >> 3) << 5;
+            MASKED_LOAD(This->Loopy.t, FineY, FINE_Y_MASK);
+            MASKED_LOAD(This->Loopy.t, CoarseY, COARSE_Y_MASK);
+        }
+    } break;
+    case PPU_ADDR:
+    {
+        /* latching because each cpu cycle is 3 ppu cycles */
+        if (This->Loopy.w++ == 0) /* first write */
+        {
+            Byte &= 0x3F;
+            u16 AddrHi = (u16)Byte << 8;
+            MASKED_LOAD(This->Loopy.t, AddrHi, 0xFF00);
+        }
+        else /* second write */
+        {
+            MASKED_LOAD(This->Loopy.t, Byte, 0x00FF);
+            This->Loopy.v = This->Loopy.t;
+        }
+    } break;
+    case PPU_DATA:
+    {
+        NESPPU_WriteInternalMemory(This, This->Loopy.v, Byte);
+        This->Loopy.v += (This->Ctrl & PPUCTRL_INC32)? 32 : 1;
+    } break;
     }
 }
 
@@ -302,10 +405,6 @@ void NESPPU_ReloadBackgroundShifters(NESPPU *This)
 
 Bool8 NESPPU_StepClock(NESPPU *This)
 {
-#define COARSE_X_MASK 0x001F
-#define COARSE_Y_MASK 0x03E0
-#define NAMETABLE_OFFSET 0x2000
-#define FINE_Y_MASK 0x7000
     /* 
      * WARNING: the following code was known to cause cancer, stroke, prostate cancer and even death. 
      *          Continue with descretion. YOU HAVE BEEN WARNED.

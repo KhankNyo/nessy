@@ -51,56 +51,7 @@ static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
     /* IO registers: PPU */
     else if (IN_RANGE(0x2000, Address, 0x3FFF))
     {
-        Address &= 0x07;
-        NESPPU *PPU = &Nes->PPU;
-        switch ((NESPPU_CtrlReg)Address)
-        {
-        case PPU_CTRL:
-        {
-            PPU->Ctrl = Byte;
-            u16 NametableBits = (u16)Byte << 10;
-            MASKED_LOAD(PPU->Loopy.t, NametableBits, 0x0C00);
-        } break;
-        case PPU_MASK: PPU->Mask = Byte; break;
-        case PPU_STATUS: /* write not allowed */ break;
-        case PPU_OAM_ADDR:
-        case PPU_OAM_DATA:
-        case PPU_SCROLL: 
-        {
-            if (PPU->Loopy.w++ == 0) /* first write */
-            {
-                PPU->Loopy.x = Byte;
-                MASKED_LOAD(PPU->Loopy.t, Byte >> 3, 0x1F);
-            }
-            else /* second write */
-            {
-                u16 FineY = (u16)Byte << 12;
-                u16 CoarseY = (Byte >> 3) << 5;
-                MASKED_LOAD(PPU->Loopy.t, FineY, 0x7000);
-                MASKED_LOAD(PPU->Loopy.t, CoarseY, 0x03E0);
-            }
-        } break;
-        case PPU_ADDR:
-        {
-            /* latching because each cpu cycle is 3 ppu cycles */
-            if (PPU->Loopy.w++ == 0) /* first write */
-            {
-                Byte &= 0x3F;
-                u16 AddrHi = (u16)Byte << 8;
-                MASKED_LOAD(PPU->Loopy.t, AddrHi, 0xFF00);
-            }
-            else /* second write */
-            {
-                MASKED_LOAD(PPU->Loopy.t, Byte, 0x00FF);
-                PPU->Loopy.v = PPU->Loopy.t;
-            }
-        } break;
-        case PPU_DATA:
-        {
-            NESPPU_WriteInternalMemory(PPU, PPU->Loopy.v, Byte);
-            PPU->Loopy.v += (PPU->Ctrl & PPUCTRL_INC32)? 32 : 1;
-        } break;
-        }
+        NESPPU_ExternalWrite(&Nes->PPU, Address & 0x07, Byte);
     }
     /* IO registers: DMA */
     else if (IN_RANGE(0x4000, Address, 0x401F))
@@ -134,44 +85,7 @@ static u8 NesInternal_ReadByte(void *UserData, u16 Address)
     /* IO registers: PPU */
     else if (IN_RANGE(0x2000, Address, 0x3FFF))
     {
-        Address &= 0x07;
-        NESPPU *PPU = &Nes->PPU;
-        switch ((NESPPU_CtrlReg)Address)
-        {
-        case PPU_CTRL: /* read not allowed */ break;
-        case PPU_MASK: /* read not allowed */ break;
-        case PPU_STATUS: 
-        {
-            u8 Status = PPU->Status; 
-            PPU->Status &= ~PPUSTATUS_VBLANK;
-            PPU->Loopy.w = 0;
-            return Status;
-        } break;
-        case PPU_OAM_ADDR: /* read not allowed */ break;
-        case PPU_OAM_DATA:
-        {
-        } break;
-        case PPU_SCROLL: /* read not allowed */ break;
-        case PPU_ADDR: /* read not allowed */ break;
-        case PPU_DATA:
-        {
-            u8 ReadValue;
-            if (PPU->Loopy.v < 0x3F00)
-            {
-                static u8 ReadBuffer;
-                ReadValue = ReadBuffer;
-                ReadBuffer = NESPPU_ReadInternalMemory(PPU, Address);
-            }
-            else /* no buffered read for this addresses below 0x3F00 */
-            {
-                ReadValue = NESPPU_ReadInternalMemory(PPU, PPU->Loopy.v);
-            }
-            PPU->Loopy.v += (PPU->Ctrl & PPUCTRL_INC32)? 32 : 1;
-            return ReadValue;
-        } break;
-        }
-
-        return 0;
+        return NESPPU_ExternalRead(&Nes->PPU, Address & 0x07);
     }
     /* IO registers: DMA */
     else if (IN_RANGE(0x4000, Address, 0x401F))
