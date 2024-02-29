@@ -277,7 +277,14 @@ const char *Nes_ParseINESFile(const void *INESFile, isize FileSize)
             FileChrRom, ChrRomSize, 
             MapperID, NameTableMirroring
         );
-        Nes_ConnectCartridge(Cartridge);
+        if (Cartridge.MapperInterface == NULL)
+        {
+            return "Unsupported mapper";
+        }
+        else
+        {
+            Nes_ConnectCartridge(Cartridge);
+        }
     } break;
     default:
     {

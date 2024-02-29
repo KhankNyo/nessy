@@ -234,14 +234,8 @@ u8 NESPPU_ReadInternalMemory(NESPPU *This, u16 Address)
     else /* 0x3F00-0x3FFF: sprite palette, image palette */
     {
         Address &= 0x1F;
-        if (Address == 0x0010) 
-            Address = 0x0000;
-        if (Address == 0x0014) 
-            Address = 0x0004;
-        if (Address == 0x0018)
-            Address = 0x0008;
-        if (Address == 0x001C)
-            Address = 0x000C;
+        if ((Address & 0x0003) == 0)
+            Address &= 0xF;
         return This->PaletteColorIndex[Address];
     }
 }
@@ -266,14 +260,8 @@ void NESPPU_WriteInternalMemory(NESPPU *This, u16 Address, u8 Byte)
     else /* 0x3F00-0x3FFF: sprite palette, image palette */
     {
         Address &= 0x1F;
-        if (Address == 0x0010) 
-            Address = 0x0000;
-        if (Address == 0x0014) 
-            Address = 0x0004;
-        if (Address == 0x0018)
-            Address = 0x0008;
-        if (Address == 0x001C)
-            Address = 0x000C;
+        if ((Address & 0x0003) == 0)
+            Address &= 0xF;
         This->PaletteColorIndex[Address] = Byte;
     }
 }
