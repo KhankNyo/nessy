@@ -186,6 +186,10 @@ void NESPPU_Reset(NESPPU *This)
 {
     This->Clk = 0;
     This->Scanline = 0;
+    This->Ctrl = 0;
+    This->Mask = 0;
+    This->Loopy.w = 0;
+    This->CurrentFrameIsOdd = false;
 }
 
 
@@ -603,13 +607,14 @@ Bool8 NESPPU_StepClock(NESPPU *This)
             /* vblank ends */
             if (This->Clk == 1)
             {
+                /* clear flags */
                 This->Status &= ~(
                     PPUSTATUS_VBLANK 
                     | PPUSTATUS_SPR0_HIT 
                     | PPUSTATUS_SPR_OVERFLOW
                 );
             }
-            /* constantly reload y-components */
+            /* ppu behavior: constantly reload y-components from t to v */
             else if (IN_RANGE(280, This->Clk, 304) && ShouldRender)
             {
                 u16 NameTableYAndCoarseYMask = COARSE_Y_MASK | FINE_Y_MASK | (1 << 11); /* nametable y */
@@ -633,6 +638,7 @@ Bool8 NESPPU_StepClock(NESPPU *This)
     /* render pixels */
     if (IN_RANGE(1, This->Clk, 256) && IN_RANGE(0, This->Scanline, 239))
     {
+        /* fine x is the offset from the highest bit in the shift register */
         u16 FineXSelect = 0x8000 >> This->Loopy.x;
         u8 Bit0 = (This->PatternLoShifter & FineXSelect) != 0;
         u8 Bit1 = (This->PatternHiShifter & FineXSelect) != 0;
@@ -643,11 +649,14 @@ Bool8 NESPPU_StepClock(NESPPU *This)
         u16 PaletteBase = 0x3F00;
         u32 Color = sPPURGBPalette[
             NESPPU_ReadInternalMemory(This, PaletteBase + PaletteIndex)
+            % STATIC_ARRAY_SIZE(sPPURGBPalette)
         ];
-        This->ScreenOutput[This->ScreenIndex++] = Color;
 
+        This->ScreenOutput[This->ScreenIndex++] = Color;
         if (This->ScreenIndex >= NES_SCREEN_BUFFER_SIZE)
+        {
             This->ScreenIndex = 0;
+        }
     }
 
 
