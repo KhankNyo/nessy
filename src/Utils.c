@@ -11,6 +11,13 @@ isize Strlen(const char *s)
     return Length;
 }
 
+void Memset(void *Dst, u8 Byte, isize ByteCount)
+{
+    u8 *DstPtr = Dst;
+    while (ByteCount > 0)
+        *DstPtr++ = Byte;
+}
+
 void Memcpy(void *Dst, const void *Src, isize ByteCount)
 {
     u8 *DstPtr = Dst;

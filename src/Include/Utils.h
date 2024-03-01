@@ -4,6 +4,7 @@
 #include "Common.h"
 
 isize Strlen(const char *s);
+void Memset(void *Dst, u8 Byte, isize ByteCount);
 void Memcpy(void *Dst, const void *Src, isize ByteCount);
 Bool8 Memcmp(const void *Dst, const void *Src, isize ByteCount);
 /* appends string to the buffer at a given index 'At', 

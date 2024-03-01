@@ -20,8 +20,12 @@ typedef struct NES
     MC6502 CPU;
     NESPPU PPU;
 
-    u8 Ram[NES_CPU_RAM_SIZE];
+    Bool8 DMA, DMAOutOfSync;
+    u16 DMAAddr;
+    u8 DMAData;
+
     u16 ControllerStatusBuffer;
+    u8 Ram[NES_CPU_RAM_SIZE];
 } NES;
 
 
@@ -36,6 +40,10 @@ static Bool8 sNesSystemSingleStepFrame = false;
 static NES sNes = {
     .Cartridge = NULL,
     .Ram = { 0 },
+
+    .DMA = false,
+    .DMAOutOfSync = false,
+    .DMAAddr = 0,
 };
 
 
@@ -59,6 +67,12 @@ static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
     {
         Nes->ControllerStatusBuffer = Platform_GetControllerState();
         Nes->ControllerStatusBuffer |= 0xFF00;
+    }
+    /* Object Attribute Memory direct access (OAM DMA) */
+    else if (Address == 0x4014)
+    {
+        Nes->DMAAddr = (u16)Byte << 8;
+        Nes->DMA = true;
     }
     /* IO registers: DMA */
     else if (IN_RANGE(0x4000, Address, 0x401F))
@@ -302,7 +316,42 @@ static Bool8 Nes_StepClock(NES *Nes)
     Bool8 FrameCompleted = NESPPU_StepClock(&Nes->PPU);
     if (Nes->Clk % 3 == 0)
     {
-        MC6502_StepClock(&Nes->CPU);
+        if (Nes->DMA)
+        {
+            /* start syncing on even clk */
+            if (Nes->DMAOutOfSync)
+            {
+                if (Nes->Clk % 2 == 1)
+                {
+                    Nes->DMAOutOfSync = false;
+                }
+            }
+            else
+            {
+                /* read cpu memory on even clk */
+                if (Nes->Clk % 2 == 0)
+                {
+                    Nes->DMAData = NesInternal_ReadByte(NULL, Nes->DMAAddr);
+                }
+                /* write to ppu memory on odd clk */
+                else
+                {
+                    u8 OAMAddr = Nes->DMAAddr++ & 0x00FF;
+                    Nes->PPU.ObjectAttributeMemory[OAMAddr] = Nes->DMAData;
+                }
+
+                /* transfer is complete (1 page) */
+                if ((Nes->DMAAddr & 0x00FF) == 0)
+                {
+                    Nes->DMA = false;
+                    Nes->DMAOutOfSync = true;
+                }
+            }
+        }
+        else 
+        {
+            MC6502_StepClock(&Nes->CPU);
+        }
     }
     return FrameCompleted;
 }
