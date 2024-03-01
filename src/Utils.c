@@ -14,7 +14,7 @@ isize Strlen(const char *s)
 void Memset(void *Dst, u8 Byte, isize ByteCount)
 {
     u8 *DstPtr = Dst;
-    while (ByteCount > 0)
+    while (ByteCount-- > 0)
         *DstPtr++ = Byte;
 }
 
@@ -24,6 +24,15 @@ void Memcpy(void *Dst, const void *Src, isize ByteCount)
     const u8 *SrcPtr = Src;
     while (ByteCount --> 0)
         *DstPtr++ = *SrcPtr++;
+}
+
+u8 FlipByte(u8 Byte)
+{
+    /* 0b abcd efgh -> 0b hgfe dcba */
+    u8 Flipped = (Byte << 4) | (Byte >> 4);                         /* 0b efgh abcd */
+    Flipped = ((Flipped & 0xCC) >> 2) | ((Flipped & 0x33) << 2);    /* 0b ghef cdab */
+    Flipped = ((Flipped & 0xAA) >> 1) | ((Flipped & 0x55) << 1);    /* 0b hgfe dcba */
+    return Flipped;
 }
 
 Bool8 Memcmp(const void *A, const void *B, isize ByteCount)

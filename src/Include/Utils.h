@@ -6,6 +6,7 @@
 isize Strlen(const char *s);
 void Memset(void *Dst, u8 Byte, isize ByteCount);
 void Memcpy(void *Dst, const void *Src, isize ByteCount);
+u8 FlipByte(u8 Byte);
 Bool8 Memcmp(const void *Dst, const void *Src, isize ByteCount);
 /* appends string to the buffer at a given index 'At', 
  * string will be truncated if the buffer does not have enough room */

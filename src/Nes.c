@@ -331,21 +331,22 @@ static Bool8 Nes_StepClock(NES *Nes)
                 /* read cpu memory on even clk */
                 if (Nes->Clk % 2 == 0)
                 {
-                    Nes->DMAData = NesInternal_ReadByte(NULL, Nes->DMAAddr);
+                    Nes->DMAData = NesInternal_ReadByte(Nes, Nes->DMAAddr);
                 }
                 /* write to ppu memory on odd clk */
                 else
                 {
                     u8 OAMAddr = Nes->DMAAddr++ & 0x00FF;
-                    Nes->PPU.ObjectAttributeMemory[OAMAddr] = Nes->DMAData;
+                    Nes->PPU.OAM.Bytes[OAMAddr] = Nes->DMAData;
+
+                    /* transfer is complete (1 page has wrapped) */
+                    if (OAMAddr == 0xFF)
+                    {
+                        Nes->DMA = false;
+                        Nes->DMAOutOfSync = true;
+                    }
                 }
 
-                /* transfer is complete (1 page) */
-                if ((Nes->DMAAddr & 0x00FF) == 0)
-                {
-                    Nes->DMA = false;
-                    Nes->DMAOutOfSync = true;
-                }
             }
         }
         else 
