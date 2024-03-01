@@ -1,6 +1,7 @@
 
 #include <windows.h>
-#include <CommCtrl.h>
+#include <commctrl.h>
+#include <commdlg.h>
 #include <wingdi.h>
 
 #include "Common.h"
@@ -573,7 +574,7 @@ static void Win32_UpdateWindowTimer(HWND Window, UINT DontCare, UINT_PTR DontCar
     sWin32_DisplayableStatus = Nes_PlatformQueryDisplayableStatus();
     sWin32_FrameBuffer = Nes_PlatformQueryFrameBuffer();
 
-    InvalidateRect(sWin32_Gui.StatusWindow, NULL, FALSE);
+    InvalidateRect(sWin32_Gui.StatusWindow, NULL, TRUE);
     InvalidateRect(sWin32_Gui.GameWindow, NULL, FALSE);
 }
 

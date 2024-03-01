@@ -159,8 +159,9 @@ static u16 GetEffectiveAddress(MC6502 *This, u16 Opcode)
     uint aaa = AAA(Opcode);
     uint bbb = BBB(Opcode);
     uint cc  = CC(Opcode);
-    /* */
+
     Bool8 UseRegY = cc >= 2 && (aaa == 4 || aaa == 5);
+    Bool8 RMW = cc >= 2 && !IN_RANGE(4, aaa, 5);
     switch (bbb)
     {
     case 0: /* (ind,X) */
@@ -194,7 +195,7 @@ static u16 GetEffectiveAddress(MC6502 *This, u16 Opcode)
         u16 IndexedAddress = Address + This->Y;
 
         /* page boundary crossing */
-        This->CyclesLeft += 3 + ((Address >> 8) != (IndexedAddress >> 8));
+        This->CyclesLeft += 3 + (((Address >> 8) != (IndexedAddress >> 8)) || 0x91 == Opcode || RMW); /* STA (ind),y */
         return IndexedAddress;
     } break;
     case 5: /* zpg,X/Y */
@@ -209,12 +210,11 @@ static u16 GetEffectiveAddress(MC6502 *This, u16 Opcode)
         u16 Address = FetchWord(This);
         u16 IndexedAddress = Address + This->Y;
 
-        This->CyclesLeft += 2 + ((Address >> 8) != (IndexedAddress >> 8));
+        This->CyclesLeft += 2 + ((Address >> 8) != ((IndexedAddress >> 8)) || 0x99 == Opcode || RMW); /* STA abs,y */
         return IndexedAddress;
     } break;
     case 7: /* abs,X/Y */
     {
-        Bool8 RMW = cc >= 2 && !IN_RANGE(4, aaa, 5);
 
         uint IndexRegister = UseRegY? This->Y : This->X;
         u16 Address = FetchWord(This);

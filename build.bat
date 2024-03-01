@@ -1,7 +1,7 @@
 @echo off
 
-set "INCARG=-I.\src\Include\"
-set "CC=gcc -ggdb -DDEBUG -Wall -Wextra -Wpedantic %INCARG%"
+set "INCARG=-I.\src\Include\ -I.\src\Include\Win32TCC"
+set "CC=tcc -DDEBUG -Wall -Wextra -Wpedantic %INCARG%"
 set "MSVC_CL=cl /Zi /DDEBUG /DEBUG /MTd /I..\src\Include\"
 
 if "clean"=="%1" (

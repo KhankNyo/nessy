@@ -73,6 +73,7 @@ static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
     {
         Nes->DMAAddr = (u16)Byte << 8;
         Nes->DMA = true;
+        Nes->DMAOutOfSync = true;
     }
     /* IO registers: DMA */
     else if (IN_RANGE(0x4000, Address, 0x401F))
@@ -346,7 +347,6 @@ static Bool8 Nes_StepClock(NES *Nes)
                         Nes->DMAOutOfSync = true;
                     }
                 }
-
             }
         }
         else 
