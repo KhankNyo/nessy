@@ -25,7 +25,7 @@ int Nes_DisassembleAt(
     for (int ByteIndex = 0; ByteIndex < InstructionBuffer->ByteCount; ByteIndex++)
     {
         u8 Byte = Memory[
-            (InstructionBuffer->Address + ByteIndex) % MemorySize
+            (InstructionBuffer->Address - 0x8000 + ByteIndex) % MemorySize
         ];
         Length += FormatString(
             Ptr + Length, 
@@ -58,6 +58,22 @@ int Nes_DisassembleAt(
     return Length;
 }
 
+
+static Bool8 Nes_DisasmCheckPC(u16 PC, InstructionInfo *Buffer, isize Count)
+{
+    u16 Addr = Buffer[0].Address;
+    Bool8 PCInBuffer = false;
+    for (isize i = 0; i < Count; i++)
+    {
+        if (Addr != Buffer[i].Address) /* misaligned */
+            return false;
+        if (PC == Addr) /* PC is in the buffer */
+            PCInBuffer = true;
+        Addr += Buffer[i].ByteCount;
+    }
+    return PCInBuffer;
+}
+
 void Nes_Disassemble(
     char *BeforePC, isize BeforePCSize,
     char *AtPC, isize AtPCSize,
@@ -69,20 +85,16 @@ void Nes_Disassemble(
     static InstructionInfo InstructionBuffer[INS_COUNT] = { 0 };
     static Bool8 Initialized = false;
 
-    if (!Initialized || 
-        !IN_RANGE(
-            InstructionBuffer[0].Address, 
-            PC,
-            InstructionBuffer[INS_COUNT - 1].Address
-        ))
+    if (!Initialized || !Nes_DisasmCheckPC(PC, InstructionBuffer, INS_COUNT))
     {
         Initialized = true;
-        int CurrentPC = PC;
+        int VirtualPC = PC;
+        int CurrentPC = PC - 0x8000;
         for (int i = 0; i < INS_COUNT; i++)
         {
             int InstructionSize = DisassembleSingleOpcode(
                 &InstructionBuffer[i].String, 
-                CurrentPC,
+                VirtualPC,
                 &Memory[CurrentPC % MemorySize],
                 NES_CPU_RAM_SIZE - (CurrentPC % NES_CPU_RAM_SIZE)
             );
@@ -95,8 +107,9 @@ void Nes_Disassemble(
             }
 
             InstructionBuffer[i].ByteCount = InstructionSize;
-            InstructionBuffer[i].Address = CurrentPC;
+            InstructionBuffer[i].Address = VirtualPC;
             CurrentPC += InstructionSize;
+            VirtualPC += InstructionSize;
         }
     }
 
