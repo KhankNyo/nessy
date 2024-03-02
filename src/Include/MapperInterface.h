@@ -106,8 +106,8 @@ u8 NESMapperInterface_DebugCPURead(NESMapperInterface *Mapper, u16 Address)
 u8 NESMapperInterface_DebugPPURead(NESMapperInterface *Mapper, u16 Address)
 {
     DEBUG_ASSERT(Mapper->MapperID == 0);
-    Address %= Mapper->PrgRomSize;
-    return Mapper->PrgRom[Address];
+    Address %= Mapper->ChrRomSize;
+    return Mapper->ChrRom[Address];
 }
 
 
