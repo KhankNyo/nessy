@@ -40,7 +40,6 @@ typedef void (*NESPPU_NmiCallback)(NESPPU *);
 #define NAMETABLE_OFFSET 0x2000
 #define FINE_Y_MASK 0x7000
 #define TILE_SIZE 16
-#define NAMETABLE_SIZE 0x0800
 
 #define GET_COARSE_X(u16Register) (((u16Register) & COARSE_X_MASK))
 #define GET_COARSE_Y(u16Register) (((u16Register) & COARSE_Y_MASK) >> 5)
@@ -97,8 +96,8 @@ struct NESPPU
     u8 ReadBuffer;
     u8 OAMAddr;
 
-    u8 PaletteColorIndex[NES_PPU_PALETTE_SIZE];
-    u8 NametableMemory[NAMETABLE_SIZE];
+    u8 PaletteColorIndex[NES_PALETTE_SIZE];
+    u8 NametableMemory[NES_NAMETABLE_SIZE*2];
     union {
         NESPPU_ObjectAttribute Entries[64];
         u8 Bytes[256];
@@ -258,7 +257,7 @@ static u16 NESPPU_MirrorNameTableAddr(NESCartridge **CartridgeHandle, u16 Logica
          *    |     0     |     1     |     0     |     1     |
          *    *-----------*-----------*-----------*-----------*
          */
-        PhysicalAddress = LogicalAddress % NAMETABLE_SIZE;
+        PhysicalAddress = LogicalAddress % (NES_NAMETABLE_SIZE*2);
     } break;
     case NAMETABLE_HORIZONTAL:
     {
@@ -271,19 +270,19 @@ static u16 NESPPU_MirrorNameTableAddr(NESCartridge **CartridgeHandle, u16 Logica
          *    |     0     |     0     |     1     |     1     |
          *    *-----------*-----------*-----------*-----------*
          */
-        PhysicalAddress = LogicalAddress % (NAMETABLE_SIZE / 2);
+        PhysicalAddress = LogicalAddress % NES_NAMETABLE_SIZE;
         if (IN_RANGE(0x0800, LogicalAddress, 0x0FFF))
         {
-            PhysicalAddress += NAMETABLE_SIZE/2;
+            PhysicalAddress += NES_NAMETABLE_SIZE;
         }
     } break;
     case NAMETABLE_ONESCREEN_HI:
     {
-        PhysicalAddress = LogicalAddress % (NAMETABLE_SIZE / 2);
+        PhysicalAddress = LogicalAddress % NES_NAMETABLE_SIZE;
     } break;
     case NAMETABLE_ONESCREEN_LO:
     {
-        PhysicalAddress = (LogicalAddress % (NAMETABLE_SIZE / 2)) + NAMETABLE_SIZE / 2;
+        PhysicalAddress = (LogicalAddress % NES_NAMETABLE_SIZE) + NES_NAMETABLE_SIZE;
     } break;
     }
     return PhysicalAddress;
@@ -361,40 +360,65 @@ static u32 NESPPU_GetRGBFromPixelAndPalette(NESPPU *This, u8 Pixel, u8 Palette)
 
 void NESPPU_GetRGBPalette(NESPPU *This, u32 *RGBPaletteArray, isize ArrayElemCount)
 {
-    DEBUG_ASSERT(ArrayElemCount == NES_PPU_PALETTE_SIZE);
-    for (int i = 0; i < NES_PPU_PALETTE_SIZE; i++)
+    DEBUG_ASSERT(ArrayElemCount == NES_PALETTE_SIZE);
+    for (int i = 0; i < NES_PALETTE_SIZE; i++)
     {
         u32 Color = NESPPU_GetRGBFromPixelAndPalette(This, i >> 2, i);
         RGBPaletteArray[i] = Color;
     }
 }
 
-Bool8 NESPPU_GetNametables(NESPPU *This, u32 *RGBLeftNametable, u32 *RGBRightNametable, isize PixelCount, u8 Palette)
+Bool8 NESPPU_GetPatternTables(NESPPU *This, 
+    u32 RGBLeftPatternTable[NES_PATTERN_TABLE_HEIGHT_PIX][NES_PATTERN_TABLE_WIDTH_PIX], 
+    u32 RGBRightPatternTable[NES_PATTERN_TABLE_HEIGHT_PIX][NES_PATTERN_TABLE_WIDTH_PIX], 
+    u8 Palette)
 {
     if (!This->CartridgeHandle || !*This->CartridgeHandle)
         return false;
 
     Palette &= 0x7;
     NESCartridge *Cartridge = *This->CartridgeHandle;
-    DEBUG_ASSERT(PixelCount == NAMETABLE_SIZE);
-    int HorizontalTileCount = 16;
-    int VerticalTileCount = 16;
-    int RGBIndex = 0;
-    for (int y = 0; y < VerticalTileCount; y++)
-    {
-        for (int x = 0; x < HorizontalTileCount; x++)
-        {
-            int TileIndex = (y*HorizontalTileCount + x)*TILE_SIZE;
-            for (int Height = 0; Height < TILE_SIZE/2; Height++)
-            {
-                u8 LeftLow = NESCartridge_DebugPPURead(Cartridge, TileIndex + Height);
-                u8 LeftHigh = NESCartridge_DebugPPURead(Cartridge, TileIndex + Height + 8);
-                u8 LeftPixel = LeftLow | (LeftHigh << 1);
-                u8 RightLow = NESCartridge_DebugPPURead(Cartridge, 0x1000 + TileIndex + Height);
-                u8 RightHigh = NESCartridge_DebugPPURead(Cartridge, 0x1000 + TileIndex + Height + 8);
-                u8 RightPixel = RightLow | (RightHigh << 1);
+    int HorizontalTileCount = 16;   /* number of tiles a pattern table contains in the horizontal direction */
+    int VerticalTileCount = 16;     /* number of tiles a pattern table contains in the vertical direction */
+    int TileWidthPixel = 8;         /* tile width in pixel */
+    int TileHeightPixel = 8;        /* tile height in pixel */
 
-                RGBIndex++;
+    for (int y = 0;
+        y < VerticalTileCount;
+        y++)
+    {
+        for (int x = 0; 
+            x < HorizontalTileCount;
+            x++)
+        {
+            int TileByteIndex = (y*HorizontalTileCount + x) * TILE_SIZE;
+            for (int YPixel = 0; 
+                YPixel < TileHeightPixel;
+                YPixel++)
+            {
+                int RightTable = NES_PATTERN_TABLE_SIZE;
+                u8 LeftPatternLow = NESCartridge_DebugPPURead(Cartridge, TileByteIndex + YPixel);
+                u8 LeftPatternHigh = NESCartridge_DebugPPURead(Cartridge, TileByteIndex + YPixel + TILE_SIZE/2);
+                u8 RightPatternLow = NESCartridge_DebugPPURead(Cartridge, RightTable + TileByteIndex + YPixel);
+                u8 RightPatternHigh = NESCartridge_DebugPPURead(Cartridge, RightTable + TileByteIndex + YPixel + TILE_SIZE/2);
+
+                for (int XPixel = 0; 
+                    XPixel < TileWidthPixel; 
+                    XPixel++)
+                {
+                    u8 LeftPatternPixel = (LeftPatternLow & 1) | ((LeftPatternHigh & 1) << 1);
+                    u8 RightPatternPixel = (RightPatternLow & 1) | ((RightPatternHigh & 1) << 1);
+                    u32 LeftPatternColor = NESPPU_GetRGBFromPixelAndPalette(This, LeftPatternPixel, Palette);
+                    u32 RightPatternColor = NESPPU_GetRGBFromPixelAndPalette(This, RightPatternPixel, Palette);
+
+                    RGBLeftPatternTable[YPixel + y*TileHeightPixel][7 - XPixel + x*TileWidthPixel] = LeftPatternColor;
+                    RGBRightPatternTable[YPixel + y*TileHeightPixel][7 - XPixel + x*TileWidthPixel] = RightPatternColor;
+
+                    LeftPatternLow >>= 1;
+                    LeftPatternHigh >>= 1;
+                    RightPatternLow >>= 1;
+                    RightPatternHigh >>= 1;
+                }
             }
         }
     }
@@ -616,7 +640,10 @@ static void NESPPU_RenderSinglePixel(NESPPU *This)
     u8 Palette = 0;
     if (BackgroundPixel && ForegroundPixel)
     {
-        if (RenderingSpr0 && ShouldRenderBackground && ShouldRenderForeground)
+        uint LowerBound = (This->Mask & (PPUMASK_SHOW_SPR_LEFT | PPUMASK_SHOW_BG_LEFT))?
+            1 : 9;
+        if (RenderingSpr0 && IN_RANGE(LowerBound, This->Clk, 257)
+        && ShouldRenderBackground && ShouldRenderForeground)
         {
             This->Status |= PPUSTATUS_SPR0_HIT;
         }
@@ -815,7 +842,11 @@ Bool8 NESPPU_StepClock(NESPPU *This)
 
 
     uint ShouldRenderBackground = This->Mask & PPUMASK_SHOW_BG;
+    if (!(This->Mask & PPUMASK_SHOW_BG_LEFT) && This->Clk < 8)
+        ShouldRenderBackground = false;
     uint ShouldRenderForeground = This->Mask & PPUMASK_SHOW_SPR;
+    if (!(This->Mask & PPUMASK_SHOW_SPR_LEFT) && This->Clk < 8)
+        ShouldRenderBackground = false;
     uint ShouldRender = ShouldRenderBackground || ShouldRenderForeground;
 
     /* putting these magic numbers in variable name makes this harder to read */
@@ -836,9 +867,6 @@ Bool8 NESPPU_StepClock(NESPPU *This)
                 /* clear sprite shifter to prevent garbage sprite data from being rendered */
                 Memset(This->SprPatternHiShifter, 0, sizeof This->SprPatternHiShifter);
                 Memset(This->SprPatternLoShifter, 0, sizeof This->SprPatternLoShifter);
-
-                /* reset spr0 flag */
-                This->Spr0IsVisible = false;
             }
             /* constantly reload y components */
             else if (ShouldRender && IN_RANGE(280, This->Clk, 304))
@@ -922,11 +950,12 @@ Bool8 NESPPU_StepClock(NESPPU *This)
                     int SpriteHeight = This->Ctrl & PPUCTRL_SPR_SIZE16? 16 : 8;
                     if (IN_RANGE(0, ScanlineDiff, SpriteHeight - 1))
                     {
-                        if (i == 0) /* sprite 0 */
-                            This->Spr0IsVisible = true;
-
                         if (This->VisibleSpriteCount < 8)
+                        {
+                            if (i == 0) /* sprite 0 */
+                                This->Spr0IsVisible = true;
                             This->VisibleSprites[This->VisibleSpriteCount] = This->OAM.Entries[i];
+                        }
                         This->VisibleSpriteCount++;
                     }
                     i++;
@@ -977,4 +1006,4 @@ Bool8 NESPPU_StepClock(NESPPU *This)
     return FrameCompleted;
 }
 
-#endif /* NES_PPU_C */
+#endif /* NES_C */

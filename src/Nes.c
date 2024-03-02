@@ -24,7 +24,7 @@ typedef struct NES
     u16 DMAAddr;
     u8 DMAData;
 
-    u16 ControllerStatusBuffer;
+    u8 ControllerStatusBuffer;
     u8 Ram[NES_CPU_RAM_SIZE];
 } NES;
 
@@ -39,6 +39,7 @@ static u32 sScreenBuffers[2][NES_SCREEN_WIDTH * NES_SCREEN_HEIGHT];
 static u32 *sBackBuffer = sScreenBuffers[0];
 static u32 *sReadyBuffer = sScreenBuffers[1];
 
+static uint sCurrentPalette;
 static Bool8 sNesSystemSingleStepCPU = false;
 static Bool8 sNesSystemSingleStepFrame = false;
 static NES sNes = {
@@ -70,7 +71,6 @@ static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
     else if (Address == 0x4016)
     {
         Nes->ControllerStatusBuffer = Platform_GetControllerState();
-        Nes->ControllerStatusBuffer |= 0xFF00;
     }
     /* Object Attribute Memory direct access (OAM DMA) */
     else if (Address == 0x4014)
@@ -265,6 +265,12 @@ Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(void)
     };
 
     NESPPU_GetRGBPalette(&sNes.PPU, Status.Palette, STATIC_ARRAY_SIZE(Status.Palette));
+    Status.PatternTablesAvailable = NESPPU_GetPatternTables(
+        &sNes.PPU, 
+        Status.LeftPatternTable, 
+        Status.RightPatternTable, 
+        sCurrentPalette
+    );
     if (sNes.Cartridge)
     {
         Nes_Disassemble(&sDisassemblerState, sNes.Cartridge, Status.PC, 
@@ -433,6 +439,12 @@ void Nes_OnEmulatorReset(void)
     sNes.Clk = 0;
     MC6502_Reset(&sNes.CPU);
     NESPPU_Reset(&sNes.PPU);
+}
+
+void Nes_OnEmulatorTogglePalette(void)
+{
+    sCurrentPalette++;
+    sCurrentPalette &= 0x7;
 }
 
 

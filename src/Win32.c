@@ -109,6 +109,20 @@ static void Win32_DeallocateMemory(void *Ptr)
     VirtualFree(Ptr, 0, MEM_RELEASE);
 }
 
+static BITMAPINFO Win32_DefaultBitmapInfo(int Width, int Height)
+{
+     BITMAPINFO BitmapInfo = {
+        .bmiHeader = {
+            .biSize = sizeof BitmapInfo.bmiHeader,
+            .biPlanes = 1,
+            .biWidth = Width,
+            .biHeight = -Height,
+            .biBitCount = 32,
+            .biCompression = BI_RGB,
+        },
+    };
+    return BitmapInfo;
+}
 
 
 static void Win32_RegisterWindowClass(
@@ -370,11 +384,11 @@ static LRESULT CALLBACK Win32_StatusWndProc(HWND Window, UINT Msg, WPARAM WParam
             Win32_DrawTextWrap(DeviceContext, &Region, sWin32_DisplayableStatus.DisasmAfterPC);
 
 
-            int PalettesToDisplay = NES_PPU_PALETTE_SIZE;
+            int PalettesToDisplay = NES_PALETTE_SIZE;
             for (int i = 0; i < PalettesToDisplay; i++)
             {
                 int x = Region.left + 10 + F32_LERP(Region.left, Region.right - 20, (double)i/PalettesToDisplay);
-                int y = sWin32_Gui.MainWindowHeight * 6/7;
+                int y = sWin32_Gui.MainWindowHeight * .95;
                 int w = F32_LERP(Region.left, Region.right - 20, (double)1/PalettesToDisplay);
                 int h = 10;
                 RECT r = {
@@ -387,6 +401,36 @@ static LRESULT CALLBACK Win32_StatusWndProc(HWND Window, UINT Msg, WPARAM WParam
                 FillRect(DeviceContext, &r, Color);
                 DeleteObject(Color);
             }
+
+            BITMAPINFO PatternTableBitmap = Win32_DefaultBitmapInfo(
+                NES_PATTERN_TABLE_WIDTH_PIX, 
+                NES_PATTERN_TABLE_HEIGHT_PIX
+            );
+            int TableSize = sWin32_Gui.MainWindowWidth * 220. / 1350;
+            int TableY = Height * .67;
+            int TableX = Region.left + 10;
+            StretchDIBits(DeviceContext, 
+                TableX, TableY, 
+                TableSize, TableSize,
+                0, 0, 
+                NES_PATTERN_TABLE_WIDTH_PIX, 
+                NES_PATTERN_TABLE_HEIGHT_PIX, 
+                sWin32_DisplayableStatus.LeftPatternTable, 
+                &PatternTableBitmap, 
+                DIB_RGB_COLORS, 
+                SRCCOPY
+            );
+            StretchDIBits(DeviceContext, 
+                TableX + TableSize + 5, TableY, 
+                TableSize, TableSize,
+                0, 0, 
+                NES_PATTERN_TABLE_WIDTH_PIX, 
+                NES_PATTERN_TABLE_HEIGHT_PIX, 
+                sWin32_DisplayableStatus.RightPatternTable, 
+                &PatternTableBitmap, 
+                DIB_RGB_COLORS, 
+                SRCCOPY
+            );
 
             if (OldFont)
                 SelectObject(DeviceContext, OldFont);
@@ -419,22 +463,13 @@ static LRESULT CALLBACK Win32_GameWndProc(HWND Window, UINT Msg, WPARAM WParam, 
         const void *Buffer = sWin32_FrameBuffer.Data;
 
         Win32_Rect Frame = Win32_FitFrameToScreen(ScreenRegion, Width, Height);
-        BITMAPINFO BufferInfo = {
-            .bmiHeader = {
-                .biSize = sizeof BufferInfo.bmiHeader,
-                .biPlanes = 1,
-                .biWidth = Width,
-                .biHeight = -Height,
-                .biBitCount = 32,
-                .biCompression = BI_RGB,
-            },
-        };
+        BITMAPINFO BitmapInfo = Win32_DefaultBitmapInfo(Width, Height);
         StretchDIBits(
             DeviceContext, 
             Frame.X, Frame.Y, 
             Frame.W, Frame.H, 
             0, 0, Width, Height,
-            Buffer, &BufferInfo, 
+            Buffer, &BitmapInfo, 
             DIB_RGB_COLORS, SRCCOPY
         );
         EndPaint(Window, &PaintStruct);
@@ -523,6 +558,10 @@ static LRESULT CALLBACK Win32_MainWndProc(HWND Window, UINT Msg, WPARAM WParam, 
         case 'F':
         {
             Nes_OnEmulatorSingleFrame();
+        } break;
+        case 'P':
+        {
+            Nes_OnEmulatorTogglePalette();
         } break;
         case VK_SPACE:
         {
