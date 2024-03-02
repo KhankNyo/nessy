@@ -312,8 +312,19 @@ static LRESULT CALLBACK Win32_StatusWndProc(HWND Window, UINT Msg, WPARAM WParam
     case WM_PAINT:
     {
         PAINTSTRUCT PaintStruct;
-        HDC DeviceContext = BeginPaint(Window, &PaintStruct);
+        HDC MainDC = BeginPaint(Window, &PaintStruct);
         RECT Region = PaintStruct.rcPaint;
+        int Width = Region.right - Region.left, 
+            Height = Region.bottom - Region.top;
+
+        HDC DeviceContext = CreateCompatibleDC(MainDC);
+        HBITMAP BackBuffer = CreateCompatibleBitmap(MainDC, Width, Height);
+        SelectObject(DeviceContext, BackBuffer);
+        {
+            HBRUSH BackgroundColor = CreateSolidBrush(sWin32_Gui.StatusWindowBackgroundColor);
+            FillRect(DeviceContext, &Region, BackgroundColor);
+            DeleteObject(BackgroundColor);
+        }
         {
             SetBkColor(DeviceContext, sWin32_Gui.StatusWindowBackgroundColor);
             SetTextColor(DeviceContext, COLOR_WHITE);
@@ -380,7 +391,9 @@ static LRESULT CALLBACK Win32_StatusWndProc(HWND Window, UINT Msg, WPARAM WParam
             if (OldFont)
                 SelectObject(DeviceContext, OldFont);
         }
+        BitBlt(MainDC, 0, 0, Width, Height, DeviceContext, 0, 0, SRCCOPY);
         DeleteDC(DeviceContext);
+        DeleteObject(BackBuffer);
         EndPaint(Window, &PaintStruct);
     } break;
     default: return DefWindowProcA(Window, Msg, WParam, LParam);
@@ -593,7 +606,7 @@ static void Win32_UpdateWindowTimer(HWND Window, UINT DontCare, UINT_PTR DontCar
     sWin32_DisplayableStatus = Nes_PlatformQueryDisplayableStatus();
     sWin32_FrameBuffer = Nes_PlatformQueryFrameBuffer();
 
-    InvalidateRect(sWin32_Gui.StatusWindow, NULL, TRUE);
+    InvalidateRect(sWin32_Gui.StatusWindow, NULL, FALSE);
     InvalidateRect(sWin32_Gui.GameWindow, NULL, FALSE);
 }
 
