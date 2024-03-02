@@ -374,7 +374,7 @@ static LRESULT CALLBACK Win32_StatusWndProc(HWND Window, UINT Msg, WPARAM WParam
             for (int i = 0; i < PalettesToDisplay; i++)
             {
                 int x = Region.left + 10 + F32_LERP(Region.left, Region.right - 20, (double)i/PalettesToDisplay);
-                int y = sWin32_Gui.MainWindowHeight * 5/6;
+                int y = sWin32_Gui.MainWindowHeight * 6/7;
                 int w = F32_LERP(Region.left, Region.right - 20, (double)1/PalettesToDisplay);
                 int h = 10;
                 RECT r = {
