@@ -358,6 +358,25 @@ static LRESULT CALLBACK Win32_StatusWndProc(HWND Window, UINT Msg, WPARAM WParam
                 Win32_InvertTextAndBackgroundColors(DeviceContext);
             Win32_DrawTextWrap(DeviceContext, &Region, sWin32_DisplayableStatus.DisasmAfterPC);
 
+
+            int PalettesToDisplay = NES_PPU_PALETTE_SIZE;
+            for (int i = 0; i < PalettesToDisplay; i++)
+            {
+                int x = Region.left + 10 + F32_LERP(Region.left, Region.right - 20, (double)i/PalettesToDisplay);
+                int y = sWin32_Gui.MainWindowHeight * 5/6;
+                int w = F32_LERP(Region.left, Region.right - 20, (double)1/PalettesToDisplay);
+                int h = 10;
+                RECT r = {
+                    .left = x,
+                    .top = y,
+                    .bottom = y + h,
+                    .right = x + w,
+                };
+                HBRUSH Color = CreateSolidBrush(sWin32_DisplayableStatus.Palette[i]);
+                FillRect(DeviceContext, &r, Color);
+                DeleteObject(Color);
+            }
+
             if (OldFont)
                 SelectObject(DeviceContext, OldFont);
         }

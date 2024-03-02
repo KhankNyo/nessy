@@ -263,6 +263,8 @@ Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(void)
         .B = MC6502_FlagGet(sNes.CPU.Flags, FLAG_B),
         .D = MC6502_FlagGet(sNes.CPU.Flags, FLAG_D),
     };
+
+    NESPPU_GetRGBPalette(&sNes.PPU, Status.Palette, STATIC_ARRAY_SIZE(Status.Palette));
     if (sNes.Cartridge)
     {
         Nes_Disassemble(&sDisassemblerState, sNes.Cartridge, Status.PC, 

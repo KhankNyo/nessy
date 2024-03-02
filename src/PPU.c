@@ -1,3 +1,5 @@
+#ifndef NES_PPU_C
+#define NES_PPU_C
 
 #include "Common.h"
 #include "Cartridge.h"
@@ -95,8 +97,8 @@ struct NESPPU
     u8 ReadBuffer;
     u8 OAMAddr;
 
-    u8 PaletteColorIndex[0x20];
-    u8 NameAndAttributeTable[NAMETABLE_SIZE];
+    u8 PaletteColorIndex[NES_PPU_PALETTE_SIZE];
+    u8 NametableMemory[NAMETABLE_SIZE];
     union {
         NESPPU_ObjectAttribute Entries[64];
         u8 Bytes[256];
@@ -129,70 +131,73 @@ typedef enum NESPPU_CtrlReg
 } NESPPU_CtrlReg;
 
 static u32 sPPURGBPalette[] = {
-    0x007C7C7C,
-    0x000000FC,
-    0x000000BC,
-    0x004428BC,
-    0x00940084,
-    0x00A80020,
-    0x00A81000,
-    0x00881400,
-    0x00503000,
-    0x00007800,
-    0x00006800,
-    0x00005800,
-    0x00004058,
+    0x00545454,
+    0x00001E74,
+    0x00081090,
+    0x00300088,
+    0x00440064,
+    0x005C0030,
+    0x00540400,
+    0x003C1800,
+    0x00202A00,
+    0x00083A00,
+    0x00004000,
+    0x00003C00,
+    0x0000323C,
     0x00000000,
     0x00000000,
     0x00000000,
-    0x00BCBCBC,
-    0x000078F8,
-    0x000058F8,
-    0x006844FC,
-    0x00D800CC,
-    0x00E40058,
-    0x00F83800,
-    0x00E45C10,
-    0x00AC7C00,
-    0x0000B800,
-    0x0000A800,
-    0x0000A844,
-    0x00008888,
+    0x00989698,
+
+    0x00084CC4,
+    0x003032EC,
+    0x005C1EE4,
+    0x008814B0,
+    0x00A01464,
+    0x00982220,
+    0x00783C00,
+    0x00545A00,
+    0x00287200,
+    0x00087C00,
+    0x00007628,
+    0x00006678,
     0x00000000,
     0x00000000,
     0x00000000,
-    0x00F8F8F8,
-    0x003CBCFC,
-    0x006888FC,
-    0x009878F8,
-    0x00F878F8,
-    0x00F85898,
-    0x00F87858,
-    0x00FCA044,
-    0x00F8B800,
-    0x00B8F818,
-    0x0058D854,
-    0x0058F898,
-    0x0000E8D8,
-    0x00787878,
+
+    0x00ECEEEC,
+    0x004C9AEC,
+    0x00787CEC,
+    0x00B062EC,
+    0x00E454EC,
+    0x00EC58B4,
+    0x00EC6A64,
+    0x00D48820,
+    0x00A0AA00,
+    0x0074C400,
+    0x004C6C20,
+    0x0038CC6c,
+    0x0038B4CC,
+    0x003C3C3C,
     0x00000000,
     0x00000000,
-    0x00FCFCFC,
-    0x00A4E4FC,
-    0x00B8B8F8,
-    0x00D8B8F8,
-    0x00F8B8F8,
-    0x00F8A4C0,
-    0x00F0D0B0,
-    0x00FCE0A8,
-    0x00F8D878,
-    0x00D8F878,
-    0x00B8F8B8,
-    0x00B8F8D8,
-    0x0000FCFC,
-    0x00F8D8F8,
+
+    0x00ECEEEC,
+    0x00A8CCEC,
+    0x00BCBCEC,
+    0x00D4B2EC,
+    0x00ECAEEC,
+    0x00ECAED4,
+    0x00ECB4B0,
+    0x00E4C490,
+    0x00CCD278,
+    0x00B4DE78,
+    0x00A8E290,
+    0x0098E2B4,
+    0x00A0D6E4,
+    0x00A0A2A0,
     0x00000000,
-    0x00000000,
+    0x00000000
 };
 
 
@@ -301,7 +306,7 @@ static u8 NESPPU_ReadInternalMemory(NESPPU *This, u16 Address)
     else if (IN_RANGE(0x2000, Address, 0x3EFF)) 
     {
         Address = NESPPU_MirrorNameTableAddr(This->CartridgeHandle, Address & 0x0FFF);
-        return This->NameAndAttributeTable[Address];
+        return This->NametableMemory[Address];
     }
     else /* 0x3F00-0x3FFF: sprite palette, image palette */
     {
@@ -328,7 +333,7 @@ static void NESPPU_WriteInternalMemory(NESPPU *This, u16 Address, u8 Byte)
     else if (IN_RANGE(0x2000, Address, 0x3EFF)) 
     {
         Address = NESPPU_MirrorNameTableAddr(This->CartridgeHandle, Address & 0xFFF);
-        This->NameAndAttributeTable[Address] = Byte;
+        This->NametableMemory[Address] = Byte;
     }
     else /* 0x3F00-0x3FFF: sprite palette, image palette */
     {
@@ -340,6 +345,20 @@ static void NESPPU_WriteInternalMemory(NESPPU *This, u16 Address, u8 Byte)
     }
 }
 
+
+void NESPPU_GetRGBPalette(NESPPU *This, u32 *RGBPaletteArray, isize ArrayElemCount)
+{
+    DEBUG_ASSERT(ArrayElemCount == NES_PPU_PALETTE_SIZE);
+    for (int i = 0; i < NES_PPU_PALETTE_SIZE; i++)
+    {
+        u8 ColorAddress = i;
+        if (ColorAddress == 0x14) ColorAddress = 0x04;
+        if (ColorAddress == 0x18) ColorAddress = 0x08;
+        if (ColorAddress == 0x1C) ColorAddress = 0x0C;
+        u8 ColorIndex = This->PaletteColorIndex[ColorAddress];
+        RGBPaletteArray[i] = sPPURGBPalette[ColorIndex % STATIC_ARRAY_SIZE(sPPURGBPalette)];
+    }
+}
 
 
 
@@ -805,7 +824,7 @@ Bool8 NESPPU_StepClock(NESPPU *This)
         {
             /* do nothing */
         }
-        else if (IN_RANGE(1, This->Clk, 256) || IN_RANGE(321, This->Clk, 336)) /* fetching data cycles */
+        else if (IN_RANGE(2, This->Clk, 256) || IN_RANGE(321, This->Clk, 337)) /* fetching data cycles */
         {
             NESPPU_FetchBackgroundData(This);
 
@@ -832,6 +851,11 @@ Bool8 NESPPU_StepClock(NESPPU *This)
                     MASKED_LOAD(This->Loopy.v, CoarseY << 5, COARSE_Y_MASK);
                 }
             }
+            else if (This->Clk == 337)
+            {
+                u16 NametableAddr = NAMETABLE_OFFSET + (This->Loopy.v & 0x0FFF);
+                NESPPU_ReadInternalMemory(This, NametableAddr);
+            }
         }
         else /* horizontal blank: 257..320, 337..340 */
         {
@@ -843,7 +867,7 @@ Bool8 NESPPU_StepClock(NESPPU *This)
                 MASKED_LOAD(This->Loopy.v, This->Loopy.t, NametableXAndCoarseXMask);
             }
             /* horizontal blank ends: dummy fetches */
-            else if (This->Clk == 337 || This->Clk == 339)
+            else if (This->Clk == 339)
             {
                 u16 NametableAddr = NAMETABLE_OFFSET + (This->Loopy.v & 0x0FFF);
                 NESPPU_ReadInternalMemory(This, NametableAddr);
@@ -903,7 +927,6 @@ Bool8 NESPPU_StepClock(NESPPU *This)
 
 
 
-
     NESPPU_RenderSinglePixel(This);
 
 
@@ -925,4 +948,4 @@ Bool8 NESPPU_StepClock(NESPPU *This)
     return FrameCompleted;
 }
 
-
+#endif /* NES_PPU_C */

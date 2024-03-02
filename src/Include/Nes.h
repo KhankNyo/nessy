@@ -9,12 +9,15 @@
 #define NES_SCREEN_HEIGHT 240
 #define NES_SCREEN_WIDTH 256
 #define NES_SCREEN_BUFFER_SIZE (NES_SCREEN_WIDTH * NES_SCREEN_HEIGHT)
+#define NES_PPU_PALETTE_SIZE 32
 
 typedef struct Nes_DisplayableStatus 
 {
     u16 PC, SP;
     u8 A, X, Y;
     u8 N, V, U, B, D, I, Z, C;
+
+    u32 Palette[NES_PPU_PALETTE_SIZE];
 
     char DisasmBeforePC[512];
     char DisasmAtPC[128];

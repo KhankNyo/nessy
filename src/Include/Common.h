@@ -32,6 +32,8 @@ typedef struct SmallString {
 #define MASKED_LOAD(AssginableDst, Expr, ExprMask) \
     (AssginableDst = ((AssginableDst) & ~(ExprMask)) | ((Expr) & (ExprMask)))
 
+#define F32_LERP(Left, Right, Percentage) (((Right) - (Left)) * (Percentage))
+
 
 #ifdef DEBUG
 #  include <stdio.h>
