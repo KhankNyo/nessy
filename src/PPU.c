@@ -19,7 +19,7 @@ typedef void (*NESPPU_NmiCallback)(NESPPU *);
 #define PPUCTRL_SLAVE_MODE      (1 << 6)  /* unused */
 #define PPUCTRL_NMI_ENABLE      (1 << 7)
 /* STATUS */
-#define PPUSTATUS_SPR0_HIT      (1 << 5)
+#define PPUSTATUS_SPR0_HIT      (0x40)
 #define PPUSTATUS_SPR_OVERFLOW  (1 << 6)
 #define PPUSTATUS_VBLANK        (1 << 7)
 /* MASK */
@@ -38,6 +38,17 @@ typedef void (*NESPPU_NmiCallback)(NESPPU *);
 #define NAMETABLE_OFFSET 0x2000
 #define FINE_Y_MASK 0x7000
 #define TILE_SIZE 16
+#define NAMETABLE_SIZE 0x0800
+
+#define GET_COARSE_X(u16Register) (((u16Register) & COARSE_X_MASK))
+#define GET_COARSE_Y(u16Register) (((u16Register) & COARSE_Y_MASK) >> 5)
+#define GET_NAMETABLE_SELECT(u16Register) (((u16Register) >> 12) & 0x3)
+#define GET_FINE_Y(u16Register) (((u16Register) & FINE_Y_MASK) >> 12)
+
+#define SET_COARSE_X(u16Register, Val) MASKED_LOAD(u16Register, Val, 0x001F)
+#define SET_COARSE_Y(u16Register, Val) MASKED_LOAD(u16Register, (u16)(Val) << 5, 0x03E0)
+#define SET_NAMETABLE_SELECT(u16Register, Val) MASKED_LOAD(u16Register, (u16)(Val) << 10, 0x0C00)
+#define SET_FINE_Y(u16Register, Val) MASKED_LOAD(u16Register, (u16)(Val) << 12, 0x7000)
 
 
 #define PPU_OA_PRIORITIZE_FOREGROUND    (1 << 5)
@@ -85,7 +96,7 @@ struct NESPPU
     u8 OAMAddr;
 
     u8 PaletteColorIndex[0x20];
-    u8 NameAndAttributeTable[0x800];
+    u8 NameAndAttributeTable[NAMETABLE_SIZE];
     union {
         NESPPU_ObjectAttribute Entries[64];
         u8 Bytes[256];
@@ -216,6 +227,8 @@ void NESPPU_Reset(NESPPU *This)
     This->CurrentFrameIsOdd = false;
     This->VisibleSpriteCount = 0;
     Memset(This->VisibleSprites, 0xFF, sizeof This->VisibleSprites);
+
+    This->ScreenIndex = 0;
 }
 
 
@@ -240,7 +253,7 @@ static u16 NESPPU_MirrorNameTableAddr(NESCartridge **CartridgeHandle, u16 Logica
          *    |     0     |     1     |     0     |     1     |
          *    *-----------*-----------*-----------*-----------*
          */
-        PhysicalAddress = LogicalAddress & 0x07FF;
+        PhysicalAddress = LogicalAddress % NAMETABLE_SIZE;
     } break;
     case NAMETABLE_HORIZONTAL:
     {
@@ -253,16 +266,19 @@ static u16 NESPPU_MirrorNameTableAddr(NESCartridge **CartridgeHandle, u16 Logica
          *    |     0     |     0     |     1     |     1     |
          *    *-----------*-----------*-----------*-----------*
          */
-        PhysicalAddress = LogicalAddress & 0x03FF;
+        PhysicalAddress = LogicalAddress % (NAMETABLE_SIZE / 2);
         if (IN_RANGE(0x0800, LogicalAddress, 0x0FFF))
         {
-            PhysicalAddress += 0x400;
+            PhysicalAddress += NAMETABLE_SIZE/2;
         }
     } break;
     case NAMETABLE_ONESCREEN_HI:
+    {
+        PhysicalAddress = LogicalAddress % (NAMETABLE_SIZE / 2);
+    } break;
     case NAMETABLE_ONESCREEN_LO:
     {
-        DEBUG_ASSERT(false && "TODO: one screen mirroring");
+        PhysicalAddress = (LogicalAddress % (NAMETABLE_SIZE / 2)) + NAMETABLE_SIZE / 2;
     } break;
     }
     return PhysicalAddress;
@@ -329,7 +345,7 @@ static void NESPPU_WriteInternalMemory(NESPPU *This, u16 Address, u8 Byte)
 
 u8 NESPPU_ExternalRead(NESPPU *This, u16 Address)
 {
-    switch ((NESPPU_CtrlReg)Address)
+    switch ((NESPPU_CtrlReg)(Address & 0x7))
     {
     case PPU_CTRL: /* read not allowed */ break;
     case PPU_MASK: /* read not allowed */ break;
@@ -350,16 +366,17 @@ u8 NESPPU_ExternalRead(NESPPU *This, u16 Address)
     case PPU_DATA:
     {
         u8 ReadValue;
-        /* read is buffered */
-        if (This->Loopy.v < 0x3F00)
-        {
-            ReadValue = This->ReadBuffer;
-            This->ReadBuffer = NESPPU_ReadInternalMemory(This, Address);
-        }
-        else /* no buffered read for this addresses below 0x3F00 */
+        if (This->Loopy.v >= 0x3F00) /* palette addr: read directly */
         {
             ReadValue = NESPPU_ReadInternalMemory(This, This->Loopy.v);
         }
+        else /* other addr: buffer the read, return prev read */
+        {
+            ReadValue = This->ReadBuffer;
+        }
+        /* NOTE: always read into buffer, even when reading palette */
+        This->ReadBuffer = NESPPU_ReadInternalMemory(This, This->Loopy.v);
+
         This->Loopy.v += (This->Ctrl & PPUCTRL_INC32)? 32 : 1;
         return ReadValue;
     } break;
@@ -369,7 +386,7 @@ u8 NESPPU_ExternalRead(NESPPU *This, u16 Address)
 
 void NESPPU_ExternalWrite(NESPPU *This, u16 Address, u8 Byte)
 {
-    switch ((NESPPU_CtrlReg)Address)
+    switch ((NESPPU_CtrlReg)(Address & 0x7))
     {
     case PPU_CTRL:
     {
@@ -385,42 +402,36 @@ void NESPPU_ExternalWrite(NESPPU *This, u16 Address, u8 Byte)
     } break;
     case PPU_OAM_DATA:
     {
-        This->OAM.Bytes[This->OAMAddr] = Byte;
+        This->OAM.Bytes[This->OAMAddr++] = Byte;
     } break;
     case PPU_SCROLL: 
     {
         if (This->Loopy.w == 0) /* first write */
         {
             This->Loopy.x = Byte & 0x7;
-            u16 CoarseX = Byte >> 3;
-            MASKED_LOAD(This->Loopy.t, CoarseX, COARSE_X_MASK);
-            This->Loopy.w = 1;
+            SET_COARSE_X(This->Loopy.t, Byte >> 3);
         }
         else /* second write */
         {
-            u16 FineY = (u16)Byte << 12;
-            u16 CoarseY = (Byte >> 3) << 5;
-            MASKED_LOAD(This->Loopy.t, FineY, FINE_Y_MASK);
-            MASKED_LOAD(This->Loopy.t, CoarseY, COARSE_Y_MASK);
-            This->Loopy.w = 0;
+            SET_FINE_Y(This->Loopy.t, Byte & 0x7);
+            SET_COARSE_Y(This->Loopy.t, Byte >> 3);
         }
+        This->Loopy.w = ~This->Loopy.w;
     } break;
     case PPU_ADDR:
     {
         /* latching because each cpu cycle is 3 ppu cycles */
         if (This->Loopy.w == 0) /* first write */
         {
-            Byte &= 0x3F;
-            u16 AddrHi = (u16)Byte << 8;
+            u16 AddrHi = ((u16)Byte << 8) & 0x3F00;
             MASKED_LOAD(This->Loopy.t, AddrHi, 0xFF00);
-            This->Loopy.w = 1;
         }
         else /* second write */
         {
-            MASKED_LOAD(This->Loopy.t, Byte, 0x00FF);
+            MASKED_LOAD(This->Loopy.t, (u16)Byte, 0x00FF);
             This->Loopy.v = This->Loopy.t;
-            This->Loopy.w = 0;
         }
+        This->Loopy.w = ~This->Loopy.w;
     } break;
     case PPU_DATA:
     {
@@ -493,7 +504,11 @@ static u32 NESPPU_GetRGBFromPixelAndPalette(NESPPU *This, u8 Pixel, u8 Palette)
 static void NESPPU_RenderSinglePixel(NESPPU *This)
 {
     Bool8 ShouldRenderBackground = (This->Mask & PPUMASK_SHOW_BG) != 0;
+    if (!(This->Mask & PPUMASK_SHOW_BG_LEFT) && This->Clk < 8)
+        ShouldRenderBackground = false;
     Bool8 ShouldRenderForeground = (This->Mask & PPUMASK_SHOW_SPR) != 0;
+    if (!(This->Mask & PPUMASK_SHOW_SPR_LEFT) && This->Clk < 8)
+        ShouldRenderForeground = false;
     /* get background pixel values from shift registers */
     u8 BackgroundPixel = 0;
     u8 BackgroundPalette = 0;
@@ -528,7 +543,7 @@ static void NESPPU_RenderSinglePixel(NESPPU *This)
                 u8 HighBitOfPixel = (This->SprPatternHiShifter[i] >> 7) & 0x1;
 
                 ForegroundPixel = LowBitOfPixel | (HighBitOfPixel << 1);
-                ForegroundPalette = (CurrentSprite->Attribute & PPU_OA_PALETTE) + 0x04; /* foreground offset into palette */
+                ForegroundPalette = (CurrentSprite->Attribute & PPU_OA_PALETTE) | 0x04; /* foreground offset into palette */
                 PrioritizeForeground = (CurrentSprite->Attribute & PPU_OA_PRIORITIZE_FOREGROUND) == 0;
 
                 /* foreground (sprite) is visible, and since the earlier the sprite is, 
@@ -551,13 +566,9 @@ static void NESPPU_RenderSinglePixel(NESPPU *This)
     /* default is transparent (whatever the background color is) */
     u8 Pixel = 0;
     u8 Palette = 0;
-    /* none are */
     if (BackgroundPixel && ForegroundPixel)
     {
-        u16 Left = 0 == (This->Mask & (PPUMASK_SHOW_BG_LEFT | PPUMASK_SHOW_SPR_LEFT)) 
-            ? 9 : 1;
-        if (RenderingSpr0 && IN_RANGE(Left, This->Clk, 257)
-        && ShouldRenderBackground && ShouldRenderForeground)
+        if (RenderingSpr0 && ShouldRenderBackground && ShouldRenderForeground)
         {
             This->Status |= PPUSTATUS_SPR0_HIT;
         }
@@ -599,111 +610,152 @@ static void NESPPU_RenderSinglePixel(NESPPU *This)
 
 static void NESPPU_FetchBackgroundData(NESPPU *This)
 {
-    /* Javidx9 */
     NESPPU_UpdateShifters(This);
-
-    /* subtract 1 bc clk = 0 was an idle clk */
     switch ((This->Clk - 1) % 8)
     {
-    /* fetch nametable byte */
-    case 0:
+    case 0: /* fetch nametable byte */
     {
-        /* Javidx9 */
         NESPPU_ReloadBackgroundShifters(This);
-
-        /* 
-         * To fetch a nametable byte, use a 12 bit addr containing: 
-         * msb          lsb
-         * NN yyyyy xxxxx
-         * ^^--------------- nametable y, x respectively
-         *    ^^^^^--------- CoarseY
-         *          ^^^^^--- CoarseX
-         * is the index into a nametable byte 
+        /* addr: 0010 NN yyyyy xxxxx 
+         *       ^^^^ ------------------ NAMETABLE_OFFSET (0x2000)
+         *            ^^ --------------- nametable y, x
+         *               ^^^^^ --------- coarse y
+         *                     ^^^^^ --- coarse x
          */
-        u16 NameTableAddr = NAMETABLE_OFFSET + (This->Loopy.v & 0x0FFF);
-        This->BgNametableByteLatch = NESPPU_ReadInternalMemory(This, NameTableAddr);
+        u16 NametableAddr = NAMETABLE_OFFSET + (This->Loopy.v & 0x0FFF);
+        This->BgNametableByteLatch = NESPPU_ReadInternalMemory(This, NametableAddr);
     } break;
-    /* fetch tile attribute */
-    case 2:
+    case 2: /* fetch tile attribute from the nametable byte above */
     {
-        u16 AttrTableBase = 0x03C0;
-        u16 NameTableSelects = This->Loopy.v & 0x0C00;             /* nametable select bits (11 and 10) */
-        u16 CoarseX = (This->Loopy.v & COARSE_X_MASK) >> (0 + 2);  /* upper 3 bits of coarse-x */
-        u16 CoarseY = (((This->Loopy.v & COARSE_Y_MASK) >> 7) << 3);  /* upper 3 bits of coarse-y */
-        /* AttrByteAddr should be:
-         * msb           lsb
-         * NN 1111 yyy xxx
-         * ^^------------------ nametable y, x respectively
-         *    ^^^^------------- 0x03C0 AttrTable offset
-         *         ^^^--------- (CoarseY >> 2)
-         *             ^^^----- (CoarseX >> 2)
-         */
-        u16 AttrTableByteAddr = 
-            (AttrTableBase + NAMETABLE_OFFSET)
-            | NameTableSelects
-            | CoarseX 
-            | CoarseY;
-        u8 AttrByte = NESPPU_ReadInternalMemory(This, AttrTableByteAddr);
-
-        /* bit select: 
-         * bit 1 of CoarseX determines 0 or 2
-         * bit 1 of CoarseY determines 0 or 4
-         * the sum of those determines the bit offset (0, 2, 4, 6)
+        /* addr: 0010 NN 1111 yyy xxx
+         *       ^^^^ ------------------ NAMETABLE_OFFSET (0x2000)
+         *            ^^ --------------- nametable y, x
+         *               ^^^^ ---------- Attribute table offset (0x03C0)
+         *                    ^^^ ------ coarse y
+         *                        ^^^ -- coarse x
          * */
-        if (This->Loopy.v & 0x02)
+        u16 CoarseX = GET_COARSE_X(This->Loopy.v);
+        u16 CoarseY = GET_COARSE_Y(This->Loopy.v);
+        u16 AttributeTableBase = NAMETABLE_OFFSET + 0x03C0;
+        u16 NametableSelect = This->Loopy.v & 0x0C00;
+
+        u16 Address = 
+            AttributeTableBase 
+            | NametableSelect 
+            | ((CoarseY >> 2) << 3) 
+            | (CoarseX >> 2);
+        u8 AttrByte = NESPPU_ReadInternalMemory(This, Address);
+
+        if (CoarseX & (1 << 1))
             AttrByte >>= 2;
-        if (This->Loopy.v & (1 << 6))
+        if (CoarseY & (1 << 1))
             AttrByte >>= 4;
-        This->BgAttrBitsLatch = AttrByte & 0x03;
+        This->BgAttrBitsLatch = AttrByte & 0x3;
     } break;
-    /* fetch low pattern table */
-    case 4:
+    case 4: /* fetch pattern low bit */
     {
-        u16 PatternLoAddr = This->Ctrl & PPUCTRL_BG_PATTERN_ADDR?
-            0x1000 : 0x0000;
-        PatternLoAddr += 
-            (u16)This->BgNametableByteLatch * TILE_SIZE;
-        PatternLoAddr += ((This->Loopy.v & FINE_Y_MASK) >> 12);     /* fine y, fetching lsb pattern table */
-        /* NOTE: fine y's width is 3 bits, but we got 4 bits of space before adding fine y, 
-         * the 3rd bit specifies whether we're reading the lsb or msb pattern table */
+        u16 BaseAddress = This->Ctrl & PPUCTRL_BG_PATTERN_ADDR? 0x1000 : 0x0000;
+        u16 Index       = (u16)This->BgNametableByteLatch * TILE_SIZE;
+        u16 TileOffset  = GET_FINE_Y(This->Loopy.v);
 
-        This->BgPatternLoLatch = NESPPU_ReadInternalMemory(
-            This, PatternLoAddr
+        This->BgPatternLoLatch = NESPPU_ReadInternalMemory(This, 
+            BaseAddress | Index | TileOffset
         );
     } break;
-    /* fetch high pattern table */
-    case 6:
+    case 6: /* fetch pattern high bit */
     {
-        u16 PatternHiAddr = This->Ctrl & PPUCTRL_BG_PATTERN_ADDR?
-            0x1000 : 0x0000;
-        PatternHiAddr += 
-            (u16)This->BgNametableByteLatch * TILE_SIZE;
-        PatternHiAddr += ((This->Loopy.v & FINE_Y_MASK) >> 12) + 8;     /* fine y, +8 to get the msb pattern table */
+        u16 BaseAddress = This->Ctrl & PPUCTRL_BG_PATTERN_ADDR? 0x1000 : 0x0000;
+        u16 Index       = (u16)This->BgNametableByteLatch * TILE_SIZE;
+        u16 TileOffset  = GET_FINE_Y(This->Loopy.v) + 8;
 
-        This->BgPatternHiLatch = NESPPU_ReadInternalMemory(
-            This, PatternHiAddr
+        This->BgPatternHiLatch = NESPPU_ReadInternalMemory(This, 
+            BaseAddress | Index | TileOffset
         );
     } break;
-    /* increment X scroll */
-    case 7:
+    case 7: /* end of tile: update x scroll */
     {
-        if (!(This->Mask & PPUMASK_SHOW_BG) && !(This->Mask & PPUMASK_SHOW_SPR))
-            break;
+        if (This->Mask & (PPUMASK_SHOW_BG | PPUMASK_SHOW_SPR))
+        {
+            /* increment coarse-y every 8 pixels */
+            u16 NewCoarseX = GET_COARSE_X(This->Loopy.v);
+            NewCoarseX += 1;
 
-        /* increment coarse-y every 8 pixels */
-        u16 NewCoarseX = (This->Loopy.v & COARSE_X_MASK);
-        NewCoarseX += 1;
+            /* if CoarseX carries, 
+             * we switch nametable-x bit to select a different horizontal nametable, 
+             * the specific nametable will be determined by the mirroring mode */
+            This->Loopy.v ^= (NewCoarseX == 32) << 10;
 
-        /* if CoarseX carries, 
-         * we switch nametable-x bit to select a different horizontal nametable, 
-         * the specific nametable will be determined by the mirroring mode */
-        This->Loopy.v ^= (NewCoarseX == 32) << 10;
-
-        /* reloads CoarseX */
-        MASKED_LOAD(This->Loopy.v, NewCoarseX, COARSE_X_MASK);
+            /* reloads CoarseX */
+            MASKED_LOAD(This->Loopy.v, NewCoarseX, COARSE_X_MASK);
+        }
     } break;
     }
 }
+
+
+static void NESPPU_LoadSpriteData(NESPPU *This)
+{
+    for (uint i = 0; i < This->VisibleSpriteCount; i++)
+    {
+        NESPPU_ObjectAttribute *CurrentSprite = &This->VisibleSprites[i];
+        int CurrentHeight = This->Scanline - CurrentSprite->y;
+
+        /* get low sprite addresses */
+        u16 SprPatternAddrLo, SprPatternAddrHi;
+        /* 8x16 */
+        if (This->Ctrl & PPUCTRL_SPR_SIZE16)
+        {
+            u16 BaseAddr = (u16)(CurrentSprite->ID & 0x1) << 12; /* first bit determines the pattern table location */
+            uint IsLowerTile = CurrentHeight >= 8;
+            u16 SpriteIndex = (u16)(CurrentSprite->ID & 0xFE) + IsLowerTile;
+            if (CurrentHeight > 8) 
+                CurrentHeight -= 8;
+            u16 PatternSelect = CurrentSprite->Attribute & PPU_OA_FLIP_VERTICAL
+                ? (7 - CurrentHeight)
+                : CurrentHeight;
+
+            SprPatternAddrLo = 
+                BaseAddr 
+                | (SpriteIndex * TILE_SIZE)
+                | (PatternSelect & 0x7);
+        }
+        /* 8x8 */
+        else
+        {
+            u16 BaseAddr = This->Ctrl & PPUCTRL_SPR_PATTERN_ADDR 
+                ? 0x1000 : 0x0000;
+            u16 SpriteIndex = CurrentSprite->ID;
+            u16 PatternSelect = CurrentSprite->Attribute & PPU_OA_FLIP_VERTICAL 
+                ? (7 - CurrentHeight)
+                : CurrentHeight;
+
+            SprPatternAddrLo = 
+                BaseAddr 
+                | (SpriteIndex * TILE_SIZE) 
+                | (PatternSelect & 0x7);
+            /* NOTE: scanline - spr.y is never greater than 7 */
+        }
+
+        /* hi and lo tiles are generally 8 bytes apart in the NES */
+        SprPatternAddrHi = SprPatternAddrLo + 8;
+        u8 SprPatternBitsLo = NESPPU_ReadInternalMemory(This, SprPatternAddrLo);
+        u8 SprPatternBitsHi = NESPPU_ReadInternalMemory(This, SprPatternAddrHi);
+
+        /* flips a sprite horizontally */
+        /* reverse the bit pattern */
+        if (CurrentSprite->Attribute & PPU_OA_FLIP_HORIZONTAL) 
+        {
+            SprPatternBitsLo = FlipByte(SprPatternBitsLo);
+            SprPatternBitsHi = FlipByte(SprPatternBitsHi);
+        }
+
+        /* load them into the shift registers */
+        This->SprPatternLoShifter[i] = SprPatternBitsLo;
+        This->SprPatternHiShifter[i] = SprPatternBitsHi;
+    }
+}
+
+
 
 Bool8 NESPPU_StepClock(NESPPU *This)
 {
@@ -720,19 +772,11 @@ Bool8 NESPPU_StepClock(NESPPU *This)
 
     /* putting these magic numbers in variable name makes this harder to read */
     /* visible scanlines (-1 is pre-render) */
-    if (IN_RANGE(-1, This->Scanline, 240))
+    if (IN_RANGE(-1, This->Scanline, 239))
     {
-        if (This->Clk == 0 
-        && This->Scanline == 0 
-        && This->CurrentFrameIsOdd
-        && ShouldRender) /* skip cycle on odd frames */
-        {
-            This->Clk = 1;
-        }
-
+        /* prerender scanline */
         if (This->Scanline == -1)
         {
-            /* starting a new frame, vblank ends */
             if (This->Clk == 1)
             {
                 This->Status &= ~(
@@ -748,165 +792,102 @@ Bool8 NESPPU_StepClock(NESPPU *This)
                 /* reset spr0 flag */
                 This->Spr0IsVisible = false;
             }
-            /* ppu behavior: constantly reload y-components from t to v */
-            else if (IN_RANGE(280, This->Clk, 304) && ShouldRenderBackground)
+            /* constantly reload y components */
+            else if (ShouldRender && IN_RANGE(280, This->Clk, 304))
             {
-                u16 NameTableYAndCoarseYMask = COARSE_Y_MASK | FINE_Y_MASK | (1 << 11); /* nametable y */
-                MASKED_LOAD(This->Loopy.v, This->Loopy.t, NameTableYAndCoarseYMask);
+                u16 YComponentMask = COARSE_Y_MASK | FINE_Y_MASK | (1 << 11); /* nametable y */
+                MASKED_LOAD(This->Loopy.v, This->Loopy.t, YComponentMask);
             }
         }
 
-
-        /* extract tile info: nametable byte -> tile pattern hi/lo, and tile attribute */
-        if ((IN_RANGE(2, This->Clk, 256) || IN_RANGE(321, This->Clk, 337)))
+        /* ================= background ================= */
+        if (This->Clk == 0)
+        {
+            /* do nothing */
+        }
+        else if (IN_RANGE(1, This->Clk, 256) || IN_RANGE(321, This->Clk, 336)) /* fetching data cycles */
         {
             NESPPU_FetchBackgroundData(This);
-        }
 
-
-        /* we have finished rendering a scanline */
-        if (This->Clk == 256 && ShouldRender) 
-        {
-            /* increment fine y, it resides in the topmost nybble */
-            u16 NewFineY = (This->Loopy.v & FINE_Y_MASK) + 0x1000;
-            if (NewFineY > FINE_Y_MASK) /* FineY wrap? */
+            /* end of visible frame, update y components */
+            if (ShouldRender && This->Clk == 256)
             {
-                /* then update CoarseY */
-                u16 CoarseY = This->Loopy.v & COARSE_Y_MASK;
-
-                /* we've reached the last row of a nametable (a nametable is 32x30) */
-                if (CoarseY == (29 << 5))
+                if (GET_FINE_Y(This->Loopy.v) != 7)              /* no wrapping */
                 {
-                    /* then we should read the next nametable in the vertical direction */
-                    CoarseY = 0;                /* make coarse y wrap */
-                    This->Loopy.v ^= 1 << 11;   /* invert nametable-y bit */
+                    This->Loopy.v += 0x1000;            /* increment fine y */
                 }
-                else /* increment CoarseY normally, don't care about carry */
+                else                                    /* fine y overflows into coarse y */
                 {
-                    CoarseY += 1 << 5;
-                }
-
-                /* reloads CoarseY */
-                MASKED_LOAD(This->Loopy.v, CoarseY, COARSE_Y_MASK);
-            }
-            /* remeber to reload fine y */
-            MASKED_LOAD(This->Loopy.v, NewFineY, FINE_Y_MASK);
-        }
-        /* right after we finished rendering a line, load x components from t to v */
-        if (This->Clk == 257 && ShouldRender)
-        {
-            /* also loads background shifters */
-            NESPPU_ReloadBackgroundShifters(This);
-
-            u16 NametableXAndCoarseXMask = COARSE_X_MASK | (1 << 10); /* nametable x */
-            MASKED_LOAD(This->Loopy.v, This->Loopy.t, NametableXAndCoarseXMask);
-        }
-
-
-        /* dummy last fetches, but mappers like MMC5 are sensitive to it */
-        if ((This->Clk == 337 || This->Clk == 339) && ShouldRender)
-        {
-            u16 NameTableAddr = NAMETABLE_OFFSET + (This->Loopy.v & 0x0FFF);
-            NESPPU_ReadInternalMemory(This, NameTableAddr);
-        }
-
-
-
-        /* ================== sprite eval/foreground rendering ================== */
-        /* SPRITE EVALUATION: 
-         * evaluate sprite at the end of each visible frame's scanline,
-         * TODO: make this cycle accurate */
-        if (This->Scanline >= 0 && This->Clk == 257)
-        {
-            Memset(This->VisibleSprites, 0xFF, sizeof This->VisibleSprites);
-            This->VisibleSpriteCount = 0;
-
-            uint OAMEntry = 0;
-            while (OAMEntry < STATIC_ARRAY_SIZE(This->OAM.Entries) && This->VisibleSpriteCount < 9)
-            {
-                int ScanlineDiff = This->Scanline - This->OAM.Entries[OAMEntry].y;
-                int SpriteHeight = This->Ctrl & PPUCTRL_SPR_SIZE16? 16 : 8;
-                if (IN_RANGE(0, ScanlineDiff, SpriteHeight - 1))
-                {
-                    if (OAMEntry == 0) /* sprite 0 */
+                    This->Loopy.v &= ~FINE_Y_MASK;      /* clear fine y */
+                    u16 CoarseY = GET_COARSE_Y(This->Loopy.v);
+                    if (CoarseY == 29)                  /* wrap and switch nametable */
                     {
-                        This->Spr0IsVisible = true;
+                        CoarseY = 0;
+                        This->Loopy.v ^= 0x0800;        /* flip nametable y */
                     }
+                    else if (CoarseY == 31) /* wrap */
+                        CoarseY = 0;
+                    else CoarseY++;
 
-                    if (This->VisibleSpriteCount < 8)
-                    {
-                        This->VisibleSprites[This->VisibleSpriteCount] = This->OAM.Entries[OAMEntry];
-                    }
-                    This->VisibleSpriteCount++;
+                    MASKED_LOAD(This->Loopy.v, CoarseY << 5, COARSE_Y_MASK);
                 }
-                OAMEntry++;
             }
-            if (This->VisibleSpriteCount > 8)
+        }
+        else /* horizontal blank: 257..320, 337..340 */
+        {
+            /* horizontal blank entry: update x component and shifters */
+            if (ShouldRender && This->Clk == 257)
             {
-                This->Status |= PPUSTATUS_SPR_OVERFLOW;
-                This->VisibleSpriteCount = 8;
+                NESPPU_ReloadBackgroundShifters(This);
+                u16 NametableXAndCoarseXMask = COARSE_X_MASK | (1 << 10); /* nametable x */
+                MASKED_LOAD(This->Loopy.v, This->Loopy.t, NametableXAndCoarseXMask);
+            }
+            /* horizontal blank ends: dummy fetches */
+            else if (This->Clk == 337 || This->Clk == 339)
+            {
+                u16 NametableAddr = NAMETABLE_OFFSET + (This->Loopy.v & 0x0FFF);
+                NESPPU_ReadInternalMemory(This, NametableAddr);
             }
         }
 
-        /* find data from pattern memory to draw the sprites needed */
-        /* TODO: make this cycle accurate */
-        /* TODO: factor this */
-        if (This->Clk == 340)
+
+        /* ================= foreground ================= */
+        if (ShouldRender)
         {
-            for (uint i = 0; i < This->VisibleSpriteCount; i++)
+            /* SPRITE EVALUATION: evaluate sprite at the end of each visible frame */
+            if (This->Scanline >= 0 && This->Clk == 257)
             {
-                NESPPU_ObjectAttribute *CurrentSprite = &This->VisibleSprites[i];
-                int CurrentHeight = This->Scanline - CurrentSprite->y;
+                /* clear sprites to 0xFF, y pos of FF means the sprites are never visible */
+                Memset(This->VisibleSprites, 0xFF, sizeof This->VisibleSprites);
+                This->VisibleSpriteCount = 0;
 
-                /* get low sprite addresses */
-                u16 SprPatternAddrLo, SprPatternAddrHi;
-                /* 8x16 */
-                if (This->Ctrl & PPUCTRL_SPR_SIZE16)
+                This->Spr0IsVisible = false;
+                uint i = 0;
+                while (i < STATIC_ARRAY_SIZE(This->OAM.Entries) && This->VisibleSpriteCount < 9)
                 {
-                    u16 BaseAddr = (u16)(CurrentSprite->ID & 0x1) << 12; /* first bit determines the pattern table location */
-                    uint IsLowerTile = CurrentHeight >= 8;
-                    u16 SpriteIndex = (u16)(CurrentSprite->ID & 0xFE) + IsLowerTile;
-                    u16 PatternSelect = CurrentSprite->Attribute & PPU_OA_FLIP_VERTICAL
-                        ? (7 - CurrentHeight)
-                        : CurrentHeight;
+                    int ScanlineDiff = This->Scanline - This->OAM.Entries[i].y;
+                    int SpriteHeight = This->Ctrl & PPUCTRL_SPR_SIZE16? 16 : 8;
+                    if (IN_RANGE(0, ScanlineDiff, SpriteHeight - 1))
+                    {
+                        if (i == 0) /* sprite 0 */
+                            This->Spr0IsVisible = true;
 
-                    SprPatternAddrLo = 
-                        BaseAddr 
-                        | (SpriteIndex * TILE_SIZE)
-                        | (PatternSelect & 0x7);
+                        if (This->VisibleSpriteCount < 8)
+                            This->VisibleSprites[This->VisibleSpriteCount] = This->OAM.Entries[i];
+                        This->VisibleSpriteCount++;
+                    }
+                    i++;
                 }
-                /* 8x8 */
-                else
+                if (This->VisibleSpriteCount > 8)
                 {
-                    u16 BaseAddr = This->Ctrl & PPUCTRL_SPR_PATTERN_ADDR 
-                        ? 0x1000 : 0x0000;
-                    u16 SpriteIndex = CurrentSprite->ID;
-                    u16 PatternSelect = CurrentSprite->Attribute & PPU_OA_FLIP_VERTICAL 
-                        ? (7 - CurrentHeight)
-                        : CurrentHeight;
-
-                    SprPatternAddrLo = 
-                        BaseAddr 
-                        | (SpriteIndex * TILE_SIZE) 
-                        | (PatternSelect & 0x7);
-                    /* NOTE: scanline - spr.y is never greater than 7 */
+                    This->Status |= PPUSTATUS_SPR_OVERFLOW;
+                    This->VisibleSpriteCount = 8;
                 }
-
-                /* hi and lo tiles are generally 8 bytes apart in the NES */
-                SprPatternAddrHi = SprPatternAddrLo + 8;
-                u8 SprPatternBitsLo = NESPPU_ReadInternalMemory(This, SprPatternAddrLo);
-                u8 SprPatternBitsHi = NESPPU_ReadInternalMemory(This, SprPatternAddrHi);
-
-                /* flips a sprite horizontally */
-                /* reverse the bit pattern */
-                if (CurrentSprite->Attribute & PPU_OA_FLIP_HORIZONTAL) 
-                {
-                    SprPatternBitsLo = FlipByte(SprPatternBitsLo);
-                    SprPatternBitsHi = FlipByte(SprPatternBitsHi);
-                }
-
-                This->SprPatternLoShifter[i] = SprPatternBitsLo;
-                This->SprPatternHiShifter[i] = SprPatternBitsHi;
+            }
+            /* find data from pattern memory to draw the sprites needed */
+            else if (This->Clk == 340)
+            {
+                NESPPU_LoadSpriteData(This);
             }
         }
     }
