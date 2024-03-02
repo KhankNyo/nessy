@@ -26,9 +26,7 @@ NESCartridge NESCartridge_Init(
     if (ChrRomSize == 0)
     {
         ChrRomSize = 8 * 1024;
-        /* TODO: better way to do this, this is a hack */
-        ChrRom = PrgRom;
-        DEBUG_ASSERT("no chr rom");
+        ChrRom = NULL;
     }
 
     NESCartridge Cartridge = {
@@ -60,6 +58,18 @@ u8 NESCartridge_Read(NESCartridge *Cartridge, u16 Address)
 void NESCartridge_Write(NESCartridge *Cartridge, u16 Address, u8 Byte)
 {    
     NESMapperInterface_Write(Cartridge->MapperInterface, Address, Byte);
+}
+
+
+
+u8 NESCartridge_DebugCPURead(NESCartridge *Cartridge, u16 Address)
+{
+    return NESMapperInterface_DebugCPURead(Cartridge->MapperInterface, Address);
+}
+
+u8 NESCartridge_DebugPPURead(NESCartridge *Cartridge, u16 Address)
+{
+    return NESMapperInterface_DebugPPURead(Cartridge->MapperInterface, Address);
 }
 
 

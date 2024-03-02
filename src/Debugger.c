@@ -1,65 +1,28 @@
+#ifndef NES_DEBUGGER_C
+#define NES_DEBUGGER_C
 
 #include "Nes.h"
-//#warning "TODO: not do 2 layers of .c include in Debugger.c"
+#include "Cartridge.h"
 #include "Disassembler.c"
 
-
-typedef struct InstructionInfo 
+typedef struct DisassembledInstruction
 {
     u16 Address;
-    u16 ByteCount;
-    SmallString String;
-} InstructionInfo;
+    u8 ByteCount;
+    u8 LineLength;
+    char Line[128 - 4];
+} DisassembledInstruction;
 
-int Nes_DisassembleAt(
-    char *Ptr, isize SizeLeft, 
-    const InstructionInfo *InstructionBuffer, 
-    const u8 *Memory, isize MemorySize)
+
+typedef struct NESDisassemblerState 
 {
-    isize Length = FormatString(Ptr, SizeLeft, 
-        "{x4}: ", InstructionBuffer->Address, 
-        NULL
-    );
-
-    int ExpectedByteCount = 3;
-    for (int ByteIndex = 0; ByteIndex < InstructionBuffer->ByteCount; ByteIndex++)
-    {
-        u8 Byte = Memory[
-            (InstructionBuffer->Address - 0x8000 + ByteIndex) % MemorySize
-        ];
-        Length += FormatString(
-            Ptr + Length, 
-            SizeLeft - Length, 
-            "{x2} ", Byte, 
-            NULL
-        );
-        ExpectedByteCount--;
-    }
-    while (ExpectedByteCount --> 0)
-    {
-        Length = AppendString(
-            Ptr,
-            SizeLeft, 
-            Length, 
-            "   "
-        );
-    }
-    Length = AppendString(
-        Ptr, 
-        SizeLeft, 
-        Length, 
-        InstructionBuffer->String.Data
-    );
-    while (Length < 28 && Length < SizeLeft)
-    {
-        Ptr[Length++] = ' ';
-    }
-    Ptr[Length] = '\0';
-    return Length;
-}
+    DisassembledInstruction DisasmBuffer[256];
+    u8 Count;
+    u8 BytesPerLine;
+} NESDisassemblerState;
 
 
-static Bool8 Nes_DisasmCheckPC(u16 PC, InstructionInfo *Buffer, isize Count)
+static Bool8 Nes_DisasmCheckPC(u16 PC, DisassembledInstruction *Buffer, isize Count)
 {
     u16 Addr = Buffer[0].Address;
     Bool8 PCInBuffer = false;
@@ -67,83 +30,135 @@ static Bool8 Nes_DisasmCheckPC(u16 PC, InstructionInfo *Buffer, isize Count)
     {
         if (Addr != Buffer[i].Address) /* misaligned */
             return false;
+
         if (PC == Addr) /* PC is in the buffer */
             PCInBuffer = true;
+
         Addr += Buffer[i].ByteCount;
     }
     return PCInBuffer;
 }
 
-void Nes_Disassemble(
-    char *BeforePC, isize BeforePCSize,
-    char *AtPC, isize AtPCSize,
-    char *AfterPC, isize AfterPCSize,
-    u16 PC, const u8 *Memory, i32 MemorySize
-)
+static u8 Nes_DisRead(void *UserData, u16 VirtualPC)
 {
-#define INS_COUNT 11
-    static InstructionInfo InstructionBuffer[INS_COUNT] = { 0 };
-    static Bool8 Initialized = false;
+    DEBUG_ASSERT(NULL != UserData && "Unreachable");
+    NESCartridge *Cartridge = UserData;
+    return NESCartridge_DebugCPURead(Cartridge, VirtualPC);
+}
 
-    if (!Initialized || !Nes_DisasmCheckPC(PC, InstructionBuffer, INS_COUNT))
+void Nes_Disassemble(
+    NESDisassemblerState *This, NESCartridge *Cartridge, u16 VirtualPC, 
+    char *BeforePCBuffer, isize BeforePCBufferSizeBytes, 
+    char *AtPCBuffer, isize AtPCBufferSizeBytes, 
+    char *AfterPCBuffer, isize AfterPCBufferSizeBytes)
+{
+    DEBUG_ASSERT(This && "nullptr");
+    DEBUG_ASSERT(Cartridge && "nullptr");
+    DEBUG_ASSERT(BeforePCBuffer && "nullptr");
+    DEBUG_ASSERT(AtPCBuffer && "nullptr");
+    DEBUG_ASSERT(AfterPCBuffer && "nullptr");
+
+    /* PC is not valid in the buffer, redo disassembly */
+    if (!Nes_DisasmCheckPC(VirtualPC, This->DisasmBuffer, This->Count))
     {
-        Initialized = true;
-        int VirtualPC = PC;
-        int CurrentPC = PC - 0x8000;
-        for (int i = 0; i < INS_COUNT; i++)
+        u16 PC = VirtualPC;
+        for (uint i = 0; i < This->Count; i++)
         {
+            char *Line = This->DisasmBuffer[i].Line;
+            int LengthLeft = sizeof This->DisasmBuffer[i].Line;
+            SmallString Instruction;
+
+            /* disassemble the instruction */
             int InstructionSize = DisassembleSingleOpcode(
-                &InstructionBuffer[i].String, 
-                VirtualPC,
-                &Memory[CurrentPC % MemorySize],
-                NES_CPU_RAM_SIZE - (CurrentPC % NES_CPU_RAM_SIZE)
+                &Instruction, 
+                PC,
+                Cartridge, 
+                Nes_DisRead
             );
-            if (-1 == InstructionSize)
+            This->DisasmBuffer[i].ByteCount = InstructionSize;
+            This->DisasmBuffer[i].Address = PC;
+
+            /* address */
+            int TmpLen = FormatString(Line, LengthLeft, 
+                "{x4}: ", PC,
+                NULL
+            );
+            Line += TmpLen;
+            LengthLeft -= TmpLen;
+
+            /* bytes */
+            for (int k = 0; k < InstructionSize; k++)
             {
-                /* retry at addr 0 */
-                CurrentPC = 0;
-                i--;
-                continue;
+                u8 Byte = NESCartridge_DebugCPURead(Cartridge, PC++);
+                TmpLen = FormatString(Line, LengthLeft,
+                    "{x2} ", Byte,
+                    NULL
+                );
+                Line += TmpLen;
+                LengthLeft -= TmpLen;
             }
 
-            InstructionBuffer[i].ByteCount = InstructionSize;
-            InstructionBuffer[i].Address = VirtualPC;
-            CurrentPC += InstructionSize;
-            VirtualPC += InstructionSize;
+            /* space */
+            for (int k = InstructionSize; k < This->BytesPerLine; k++)
+            {
+                TmpLen = AppendString(Line, LengthLeft, 0, "   ");
+                Line += TmpLen;
+                LengthLeft -= TmpLen;
+            }
+            TmpLen = FormatString(Line, LengthLeft, "{s}\n", Instruction.Data, NULL);
+            This->DisasmBuffer[i].LineLength = Line + TmpLen - This->DisasmBuffer[i].Line;
+            DEBUG_ASSERT(This->DisasmBuffer[i].LineLength < sizeof This->DisasmBuffer[i].Line);
         }
     }
 
 
+    char *WritePtr = BeforePCBuffer;
+    int LengthLeft = BeforePCBufferSizeBytes;
+
+    /* before PC */
     int i = 0;
-    while (i < INS_COUNT)
+    for (; 
+        i < This->Count 
+        && This->DisasmBuffer[i].Address != VirtualPC
+        && LengthLeft >= (int)This->DisasmBuffer[i].LineLength;
+        i++)
     {
-        if (InstructionBuffer[i].Address == PC)
-            break;
+        Memcpy(WritePtr, This->DisasmBuffer[i].Line, This->DisasmBuffer[i].LineLength);
+        WritePtr += This->DisasmBuffer[i].LineLength;
+        LengthLeft -= This->DisasmBuffer[i].LineLength;
+        if (LengthLeft > 0)
+            *WritePtr = '\0';
+    }
+    BeforePCBuffer[BeforePCBufferSizeBytes - 1] = '\0';
 
-        if (i)
-            AppendString(BeforePC++, BeforePCSize--, 0, "\n");
-        int Len = Nes_DisassembleAt(BeforePC, BeforePCSize, &InstructionBuffer[i], Memory, MemorySize);
-        BeforePC += Len;
-        BeforePCSize -= Len;
+    /* at PC */
+    if (i < This->Count 
+    && AtPCBufferSizeBytes >= (int)This->DisasmBuffer[i].LineLength
+    && This->DisasmBuffer[i].Address == VirtualPC)
+    {
+        /* remove newline */
+        if (WritePtr > BeforePCBuffer && LengthLeft > 0)
+            WritePtr[-1] = '\0';
+        Memcpy(AtPCBuffer, This->DisasmBuffer[i].Line, This->DisasmBuffer[i].LineLength);
+        AtPCBuffer[This->DisasmBuffer[i].LineLength - 1] = '\0';
         i++;
     }
 
-    if (i < INS_COUNT)
+    /* after PC */
+    WritePtr = AfterPCBuffer;
+    LengthLeft = AfterPCBufferSizeBytes;
+    for (; 
+        i < This->Count
+        && LengthLeft >= (int)This->DisasmBuffer[i].LineLength; 
+        i++) 
     {
-        Nes_DisassembleAt(AtPC, AtPCSize, &InstructionBuffer[i], Memory, MemorySize);
-        i++;
+        Memcpy(WritePtr, This->DisasmBuffer[i].Line, This->DisasmBuffer[i].LineLength);
+        WritePtr += This->DisasmBuffer[i].LineLength;
+        LengthLeft -= This->DisasmBuffer[i].LineLength;
+        if (LengthLeft > 0)
+            *WritePtr = '\0';
     }
-
-    while (i < INS_COUNT)
-    {
-        int Len = Nes_DisassembleAt(AfterPC, AfterPCSize, &InstructionBuffer[i], Memory, MemorySize);
-        AfterPC += Len;
-        AfterPCSize -= Len;
-        AppendString(AfterPC++, AfterPCSize--, 0, "\n");
-        i++;
-    }
-#undef INS_COUNT
+    AfterPCBuffer[AfterPCBufferSizeBytes - 1] = '\0';
 }
 
-
-
+#endif /* NES_DEBUGGER_C */

@@ -1,26 +1,19 @@
+#ifndef DISASSEMBLER_C
+#define DISASSEMBLER_C
 #include "Utils.h"
 #include "Common.h"
 
-#define DISASM_NOT_ENOUGH_SPACE -1
-/* returns 
- *     DISASM_NOT_ENOUGH_SPACE if Buffer was too small, 
- *     else index of the next instruction */
-i32 DisassembleSingleOpcode(
-    SmallString *OutDisassembledInstruction, u16 PC, const u8 *BufferStart, i32 BufferSizeBytes)
+typedef u8 (*DisassemblerReadFn)(void *UserData, u16 VirtualPC);
+/* returns the size of the instruction (negative if wrapping) */
+i32 DisassembleSingleOpcode( 
+    SmallString *OutDisassembledInstruction, u16 VirtualPC, void *UserData, DisassemblerReadFn ProvideByte
+)
 {
-#define READ_BYTE() \
-    (Current + 1 > BufferEnd? \
-        ((OutOfSpace = true), 0) \
-        : *Current++\
-    )
+#define READ_BYTE() ProvideByte(UserData, VirtualPC++)
+    u8 PlaceHolder; /* to prevent the compiler from reordering (if it does) */
 #define READ_WORD() \
-    (Current + 2 > BufferEnd? \
-        ((OutOfSpace = true), 0) \
-        : (\
-            (Current += 2), \
-            (Current[-2] | ((u16)Current[-1] << 8))\
-          )\
-    )
+    ((PlaceHolder = READ_BYTE()), \
+      PlaceHolder | ((u16)READ_BYTE() << 8))
 
 #define APPEND(DataType, Index, ...) Append##DataType \
     (OutDisassembledInstruction->Data, sizeof(SmallString), Index, __VA_ARGS__)
@@ -48,14 +41,7 @@ i32 DisassembleSingleOpcode(
     /* abs,X */     case 7: FMT_OP(MnemonicString, " $",  u16, READ_WORD(), ",X"); break;\
     }\
 } while (0)
-
-
-    if (BufferSizeBytes < 1)
-        return DISASM_NOT_ENOUGH_SPACE;
-
-    Bool8 OutOfSpace = false;
-    const u8 *Current = BufferStart;
-    const u8 *BufferEnd = BufferStart + BufferSizeBytes;
+    u16 PCStart = VirtualPC;
     u8 Opcode = READ_BYTE();
     /* 
      * opcode: 0baaabbbcc
@@ -166,7 +152,7 @@ i32 DisassembleSingleOpcode(
                 "BCC", "BCS", "BNE", "BEQ"
             };
             i8 ByteOffset = READ_BYTE();
-            u16 Address = 0xFFFF & ((int32_t)PC + 2 + (int32_t)ByteOffset);
+            u16 Address = 0xFFFF & ((int32_t)VirtualPC + 2 + (int32_t)ByteOffset);
             FMT_OP(Mnemonic[AAA(Opcode)], " $", u16, Address, "");
         }
         else /* STY, LDY, CPY, CPX */
@@ -242,12 +228,8 @@ i32 DisassembleSingleOpcode(
     } break;
     }
 
-    if (OutOfSpace)
-    {
-        return DISASM_NOT_ENOUGH_SPACE;
-    }
-    return Current - BufferStart;
-
+    u32 InstructionSize = VirtualPC - PCStart;
+    return InstructionSize;
 #undef READ_BYTE
 #undef READ_WORD
 #undef IMM_OP
@@ -266,7 +248,7 @@ i32 DisassembleSingleOpcode(
 
 /* maximum range that a 6502 can address */
 static u8 sMemory[0x10000];
-static u32 sMemorySize;
+static u32 sMemorySize = sizeof sMemory;
 
 static Bool8 ReadFileIntoMemory(const char *FileName)
 {
@@ -305,6 +287,12 @@ Fail:
     return false;
 }
 
+static u8 DisRead(void *UserData, u16 VirtualPC)
+{
+    (void)UserData;
+    return sMemory[VirtualPC];
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 2)
@@ -336,16 +324,16 @@ int main(int argc, char **argv)
         /* print the address */
         APPEND_LINE("%04X: ", CurrentInstructionOffset);
 
-        const u8 *CurrentInstruction = &sMemory[CurrentInstructionOffset];
+        u8 *CurrentInstruction = &sMemory[CurrentInstructionOffset];
         i32 InstructionLength = DisassembleSingleOpcode(
             &InstructionStr, 
             CurrentInstructionOffset,
-            CurrentInstruction, 
-            CurrentMemorySize
+            NULL,
+            DisRead
         );
-        if (DISASM_NOT_ENOUGH_SPACE == InstructionLength)
+        if (InstructionLength <= 0)
         {
-            printf("Warning: Last instruction could not be disassembled.\n");
+            printf("Warning: could not fully display the content of instruction at $%04x\n", CurrentInstructionOffset);
             break;
         }
         
@@ -370,4 +358,4 @@ int main(int argc, char **argv)
     return 0;
 }
 #endif /* STANDALONE */ 
-
+#endif /* DISASSEMBLER_C */

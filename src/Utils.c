@@ -105,6 +105,8 @@ isize FormatString(char *Buffer, isize BufferSize, ...)
 isize FormatStringArgs(char *Buffer, isize BufferSize, va_list Args)
 {
 #define WRITE_BUF(Ch) ((LenLeft--), (Buffer[Len++] = Ch))
+    DEBUG_ASSERT(NULL != Buffer);
+    DEBUG_ASSERT(BufferSize > 0 && "Invalid buffer size");
     isize Len = 0;
     isize LenLeft = BufferSize;
 
@@ -151,6 +153,8 @@ Continue:
     }
     if (LenLeft > 0)
         Buffer[Len] = '\0';
+    else /* BufferSize is assumed to be non-zero */
+        Buffer[Len - 1] = '\0';
     return Len;
 #undef WRITE_BUF
 }

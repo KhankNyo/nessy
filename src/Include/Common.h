@@ -39,7 +39,7 @@ typedef struct SmallString {
 #  define DEBUG_ASSERT(x) do {\
     if (!(x)) {\
         fprintf(stderr, "Assertion failed on line "STRFY(__LINE__)": " #x);\
-        abort();\
+        *((char*)0) = 0;\
     }\
 } while (0)
 #else

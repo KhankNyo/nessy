@@ -22,6 +22,9 @@ void NESMapperInterface_Destroy(NESMapperInterface *Mapper);
 u8 NESMapperInterface_Read(NESMapperInterface *Mapper, u16 Address);
 void NESMapperInterface_Write(NESMapperInterface *Mapper, u16 Address, u8 Byte);
 
+u8 NESMapperInterface_DebugCPURead(NESMapperInterface *Mapper, u16 Address);
+u8 NESMapperInterface_DebugPPURead(NESMapperInterface *Mapper, u16 Address);
+
 #endif /* MAPPER_INTERFACE_H */
 
 
@@ -43,6 +46,8 @@ NESMapperInterface *NESMapperInterface_Init(
 {
     if (MapperID != 0)
         return NULL;
+
+    /* mapper 0 only */
     NESMapper000 *Mapper000 = malloc(sizeof(NESMapper000));
     DEBUG_ASSERT(Mapper000);
 
@@ -50,11 +55,18 @@ NESMapperInterface *NESMapperInterface_Init(
     Mapper000->Base.MapperID = MapperID;
     Mapper000->Base.PrgRom = BytePtr;
     Mapper000->Base.PrgRomSize = PrgRomSize;
+    Memcpy(Mapper000->Base.PrgRom, PrgRom, PrgRomSize);
+
     Mapper000->Base.ChrRom = BytePtr + PrgRomSize;
     Mapper000->Base.ChrRomSize = ChrRomSize;
-
-    Memcpy(Mapper000->Base.PrgRom, PrgRom, PrgRomSize);
-    Memcpy(Mapper000->Base.ChrRom, ChrRom, ChrRomSize);
+    if (NULL != ChrRom)
+    {
+        Memcpy(Mapper000->Base.ChrRom, ChrRom, ChrRomSize);
+    }
+    else
+    {
+        Memset(Mapper000->Base.ChrRom, 0, ChrRomSize);
+    }
     return (NESMapperInterface *)Mapper000;
 }
 
@@ -66,14 +78,14 @@ void NESMapperInterface_Destroy(NESMapperInterface *Mapper)
 u8 NESMapperInterface_Read(NESMapperInterface *Mapper, u16 Address)
 {
     DEBUG_ASSERT(Mapper->MapperID == 0);
-    if (Address < 0x3FFF) /* CHR ROM */
+    if (Address < 0x7FFF) /* CHR ROM */
     {
-        Address &= Mapper->ChrRomSize - 1;
+        Address %= Mapper->ChrRomSize;
         return Mapper->ChrRom[Address];
     }
     else /* PRG ROM */
     {
-        Address &= Mapper->PrgRomSize - 1;
+        Address %= Mapper->PrgRomSize;
         return Mapper->PrgRom[Address];
     }
 }
@@ -81,6 +93,21 @@ u8 NESMapperInterface_Read(NESMapperInterface *Mapper, u16 Address)
 void NESMapperInterface_Write(NESMapperInterface *Mapper, u16 Address, u8 Byte)
 {
     /* mapper 0 does not write to prg rom or chr rom  */
+}
+
+
+u8 NESMapperInterface_DebugCPURead(NESMapperInterface *Mapper, u16 Address)
+{
+    DEBUG_ASSERT(Mapper->MapperID == 0);
+    Address %= Mapper->PrgRomSize;
+    return Mapper->PrgRom[Address];
+}
+
+u8 NESMapperInterface_DebugPPURead(NESMapperInterface *Mapper, u16 Address)
+{
+    DEBUG_ASSERT(Mapper->MapperID == 0);
+    Address %= Mapper->PrgRomSize;
+    return Mapper->PrgRom[Address];
 }
 
 

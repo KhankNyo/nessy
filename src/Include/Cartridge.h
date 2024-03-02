@@ -29,5 +29,10 @@ NESCartridge NESCartridge_Init(
 u8 NESCartridge_Read(NESCartridge *Cartridge, u16 Address);
 void NESCartridge_Write(NESCartridge *Cartridge, u16 Address, u8 Byte);
 
+
+u8 NESCartridge_DebugCPURead(NESCartridge *Cartridge, u16 Address);
+u8 NESCartridge_DebugPPURead(NESCartridge *Cartridge, u16 Address);
+
+
 #endif /* CARTRIDGE_H */
 

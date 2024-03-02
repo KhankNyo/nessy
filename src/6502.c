@@ -1,3 +1,5 @@
+#ifndef MC6502_C
+#define MC6502_C
 #include "Common.h"
 
 typedef struct MC6502 MC6502;
@@ -1013,7 +1015,7 @@ void MC6502_StepClock(MC6502 *This)
 #include <stdio.h>
 #include "Disassembler.c"
 
-static u8 sMemory[0x10000];
+static u8 sMemory[UINT16_MAX + 1];
 static Bool8 sRWLog = false;
 
 static u8 ReadFn(void *This, u16 Address)
@@ -1030,6 +1032,12 @@ static void WriteFn(void *This, u16 Address, u8 Byte)
     if (sRWLog)
         printf("[WRITING] %02x <- %04x <- %02x\n", sMemory[Address], Address, Byte);
     sMemory[Address] = Byte;
+}
+
+static u8 DisRead(void *UserData, u16 VirtualPC)
+{
+    (void)UserData;
+    return sMemory[VirtualPC];
 }
 
 static void PrintDisassembly(int PC)
@@ -1056,8 +1064,8 @@ static void PrintDisassembly(int PC)
             int InstructionSize = DisassembleSingleOpcode(
                 &InstructionBuffer[i].String, 
                 CurrentPC,
-                &sMemory[CurrentPC],
-                sizeof sMemory - CurrentPC
+                NULL,
+                DisRead
             );
             if (-1 == InstructionSize)
             {
@@ -1210,4 +1218,5 @@ int main(int argc, char **argv)
 }
 
 #endif /* STANDALONE */
+#endif /* MC6502_C */
 

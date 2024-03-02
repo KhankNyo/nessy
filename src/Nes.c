@@ -29,11 +29,15 @@ typedef struct NES
 } NES;
 
 
+static NESDisassemblerState sDisassemblerState = {
+    .Count = 16,
+    .BytesPerLine = 3,
+};
+
 static NESCartridge sConnectedCartridge;
 static u32 sScreenBuffers[2][NES_SCREEN_WIDTH * NES_SCREEN_HEIGHT];
 static u32 *sBackBuffer = sScreenBuffers[0];
 static u32 *sReadyBuffer = sScreenBuffers[1];
-
 
 static Bool8 sNesSystemSingleStepCPU = false;
 static Bool8 sNesSystemSingleStepFrame = false;
@@ -261,11 +265,10 @@ Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(void)
     };
     if (sNes.Cartridge)
     {
-        Nes_Disassemble(
+        Nes_Disassemble(&sDisassemblerState, sNes.Cartridge, Status.PC, 
             Status.DisasmBeforePC, sizeof Status.DisasmBeforePC,
             Status.DisasmAtPC, sizeof Status.DisasmAtPC,
-            Status.DisasmAfterPC, sizeof Status.DisasmAfterPC, 
-            Status.PC, sNes.Cartridge->Rom, sNes.Cartridge->RomSizeBytes
+            Status.DisasmAfterPC, sizeof Status.DisasmAfterPC
         );
     }
     return Status;
@@ -371,6 +374,7 @@ void Nes_OnLoop(double ElapsedTime)
             } while (sNes.CPU.CyclesLeft > 0);
             sNes.Clk = 0;
         }
+        ResidueTime = ElapsedTime;
     }
     else if (sNesSystemSingleStepFrame)
     {
@@ -380,6 +384,7 @@ void Nes_OnLoop(double ElapsedTime)
             } while (!Nes_StepClock(&sNes));
             sNes.Clk = 0;
         }
+        ResidueTime = ElapsedTime;
     }
     else
     {
