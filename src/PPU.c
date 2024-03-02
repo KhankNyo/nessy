@@ -346,18 +346,59 @@ static void NESPPU_WriteInternalMemory(NESPPU *This, u16 Address, u8 Byte)
 }
 
 
+static u32 NESPPU_GetRGBFromPixelAndPalette(NESPPU *This, u8 Pixel, u8 Palette)
+{
+    /* take 2 lower bits only */
+    Pixel &= 0x3;
+    Palette &= 0x7;
+
+    u16 PaletteBase = 0x3F00;
+    u16 PaletteIndex = (Palette << 2) | Pixel;
+    u8 ColorIndex = NESPPU_ReadInternalMemory(This, PaletteBase + PaletteIndex);
+    return sPPURGBPalette[ColorIndex % STATIC_ARRAY_SIZE(sPPURGBPalette)];
+}
+
+
 void NESPPU_GetRGBPalette(NESPPU *This, u32 *RGBPaletteArray, isize ArrayElemCount)
 {
     DEBUG_ASSERT(ArrayElemCount == NES_PPU_PALETTE_SIZE);
     for (int i = 0; i < NES_PPU_PALETTE_SIZE; i++)
     {
-        u8 ColorAddress = i;
-        if (ColorAddress == 0x14) ColorAddress = 0x04;
-        if (ColorAddress == 0x18) ColorAddress = 0x08;
-        if (ColorAddress == 0x1C) ColorAddress = 0x0C;
-        u8 ColorIndex = This->PaletteColorIndex[ColorAddress];
-        RGBPaletteArray[i] = sPPURGBPalette[ColorIndex % STATIC_ARRAY_SIZE(sPPURGBPalette)];
+        u32 Color = NESPPU_GetRGBFromPixelAndPalette(This, i >> 2, i);
+        RGBPaletteArray[i] = Color;
     }
+}
+
+Bool8 NESPPU_GetNametables(NESPPU *This, u32 *RGBLeftNametable, u32 *RGBRightNametable, isize PixelCount, u8 Palette)
+{
+    if (!This->CartridgeHandle || !*This->CartridgeHandle)
+        return false;
+
+    Palette &= 0x7;
+    NESCartridge *Cartridge = *This->CartridgeHandle;
+    DEBUG_ASSERT(PixelCount == NAMETABLE_SIZE);
+    int HorizontalTileCount = 16;
+    int VerticalTileCount = 16;
+    int RGBIndex = 0;
+    for (int y = 0; y < VerticalTileCount; y++)
+    {
+        for (int x = 0; x < HorizontalTileCount; x++)
+        {
+            int TileIndex = (y*HorizontalTileCount + x)*TILE_SIZE;
+            for (int Height = 0; Height < TILE_SIZE/2; Height++)
+            {
+                u8 LeftLow = NESCartridge_DebugPPURead(Cartridge, TileIndex + Height);
+                u8 LeftHigh = NESCartridge_DebugPPURead(Cartridge, TileIndex + Height + 8);
+                u8 LeftPixel = LeftLow | (LeftHigh << 1);
+                u8 RightLow = NESCartridge_DebugPPURead(Cartridge, 0x1000 + TileIndex + Height);
+                u8 RightHigh = NESCartridge_DebugPPURead(Cartridge, 0x1000 + TileIndex + Height + 8);
+                u8 RightPixel = RightLow | (RightHigh << 1);
+
+                RGBIndex++;
+            }
+        }
+    }
+    return true;
 }
 
 
@@ -506,18 +547,6 @@ void NESPPU_ReloadBackgroundShifters(NESPPU *This)
         MASKED_LOAD(This->BgAttrLoShifter, InflatedLoAttrBit, 0xFF);
         MASKED_LOAD(This->BgAttrHiShifter, InflatedHiAttrBit, 0xFF);
     }
-}
-
-static u32 NESPPU_GetRGBFromPixelAndPalette(NESPPU *This, u8 Pixel, u8 Palette)
-{
-    /* take 2 lower bits only */
-    Pixel &= 0x3;
-    Palette &= 0x3;
-
-    u16 PaletteBase = 0x3F00;
-    u16 PaletteIndex = (Palette << 2) | Pixel;
-    u8 ColorIndex = NESPPU_ReadInternalMemory(This, PaletteBase + PaletteIndex);
-    return sPPURGBPalette[ColorIndex % STATIC_ARRAY_SIZE(sPPURGBPalette)];
 }
 
 static void NESPPU_RenderSinglePixel(NESPPU *This)
