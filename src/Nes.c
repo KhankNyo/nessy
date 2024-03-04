@@ -402,6 +402,9 @@ void Nes_OnLoop(double ElapsedTime)
             do {
                 Nes_StepClock(&sNes);
             } while (sNes.CPU.CyclesLeft > 0);
+            Nes_StepClock(&sNes);
+            Nes_StepClock(&sNes);
+            Nes_StepClock(&sNes);
         } break;
         case EMUMODE_SINGLE_FRAME:
         {

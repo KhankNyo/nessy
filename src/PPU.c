@@ -314,8 +314,11 @@ static u8 NESPPU_ReadInternalMemory(NESPPU *This, u16 Address)
     else /* 0x3F00-0x3FFF: sprite palette, image palette */
     {
         Address &= 0x1F;
-        /* mirror background entries */
-        if ((Address & 0x0003) == 0)
+        /* grayscale color */
+        if (This->Mask & PPUMASK_GRAYSCALE)
+            Address &= 0x30;
+        /* mirror background entries if pixel is transparent */
+        else if ((Address & 0x0003) == 0)
             Address &= 0xF;
         return This->PaletteColorIndex[Address];
     }
@@ -341,9 +344,12 @@ static void NESPPU_WriteInternalMemory(NESPPU *This, u16 Address, u8 Byte)
     else /* 0x3F00-0x3FFF: sprite palette, image palette */
     {
         Address &= 0x1F;
-        /* mirror background entries */
-        if ((Address & 0x0003) == 0)
-            Address &= 0xF;
+        /* grayscale color */
+        if (This->Mask & PPUMASK_GRAYSCALE)
+            Address &= 0x30;
+        /* mirror background entries if pixel is transparent */
+        else if ((Address & 0x0003) == 0)
+            Address &= 0x0F;
         This->PaletteColorIndex[Address] = Byte;
     }
 }
@@ -493,9 +499,21 @@ void NESPPU_ExternalWrite(NESPPU *This, u16 Address, u8 Byte)
     {
     case PPU_CTRL:
     {
+        Bool8 NmiWasLow = (This->Ctrl & PPUCTRL_NMI_ENABLE) != 0;
         This->Ctrl = Byte;
         u16 NametableBits = (u16)Byte << 10;
         MASKED_LOAD(This->Loopy.t, NametableBits, 0x0C00);
+
+        Bool8 InVBlank = 
+            (IN_RANGE(241, This->Scanline, 260) && This->Clk) 
+            || (This->Scanline == -1 && This->Clk < 1);
+        if (InVBlank 
+        && (This->Status & PPUSTATUS_VBLANK)
+        && NmiWasLow
+        && (This->Ctrl & PPUCTRL_NMI_ENABLE))
+        {
+            This->NmiCallback(This);
+        }
     } break;
     case PPU_MASK: This->Mask = Byte; break;
     case PPU_STATUS: /* write not allowed */ break;
