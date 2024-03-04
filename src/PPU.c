@@ -81,6 +81,8 @@ struct NESPPU
     u8 Mask;
     u8 Status;
     Bool8 CurrentFrameIsOdd;
+    Bool8 SupressNMIThisFrame;
+    Bool8 ShouldNotSetVBlankThisFrame;
 
 
     u8 BgNametableByteLatch;
@@ -230,6 +232,8 @@ void NESPPU_Reset(NESPPU *This)
     This->Loopy.w = 0;
     This->CurrentFrameIsOdd = false;
     This->VisibleSpriteCount = 0;
+    This->SupressNMIThisFrame = false;
+    This->ShouldNotSetVBlankThisFrame = false;
     Memset(This->VisibleSprites, 0xFF, sizeof This->VisibleSprites);
 
     This->ScreenIndex = 0;
@@ -435,7 +439,22 @@ u8 NESPPU_ExternalRead(NESPPU *This, u16 Address)
     case PPU_MASK: /* read not allowed */ break;
     case PPU_STATUS: 
     {
-        u8 Status = This->Status; 
+        u8 Status = This->Status;
+        if (This->Scanline == 240)
+        {
+            /* reading status 4 to 1 cycles before vblank is about to set */
+            if (This->Clk == 0 || This->Clk == 1) 
+            {
+                /* disables status for the whole duration, disables NMI */
+                This->ShouldNotSetVBlankThisFrame = true;
+                This->SupressNMIThisFrame = true;
+            }
+            /* reading status when vblank is set, or 1 cycle after */
+            else if (This->Clk == 1 || This->Clk == 2)
+            {
+                This->SupressNMIThisFrame = true;
+            }
+        }
         This->Status &= ~PPUSTATUS_VBLANK;
         This->Loopy.w = 0;
         return Status;
@@ -976,11 +995,22 @@ Bool8 NESPPU_StepClock(NESPPU *This)
     /* vblank starts */
     else if (This->Scanline == 241 && This->Clk == 1)
     {
-        This->Status |= PPUSTATUS_VBLANK;
-        if (This->Ctrl & PPUCTRL_NMI_ENABLE)
+        if (!This->ShouldNotSetVBlankThisFrame)
+            This->Status |= PPUSTATUS_VBLANK;
+        else This->ShouldNotSetVBlankThisFrame = false;
+
+        if (This->SupressNMIThisFrame)
         {
-            This->NmiCallback(This);
+            This->SupressNMIThisFrame = false;
         }
+        else
+        {
+            if (This->Ctrl & PPUCTRL_NMI_ENABLE)
+            {
+                This->NmiCallback(This);
+            }
+        }
+        
     }
 
 

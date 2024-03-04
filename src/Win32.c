@@ -609,7 +609,7 @@ static Bool8 Win32_PollInputs(void)
     /* check async file operation */
     if (sWin32_FileHandle != INVALID_HANDLE_VALUE)
     {
-        DWORD BytesReadSoFar;
+        DWORD BytesReadSoFar = sWin32_FileBufferSize;
         if (GetOverlappedResult(
             sWin32_FileHandle, 
             &sWin32_AsyncFileReader, 
@@ -677,6 +677,7 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
             DefaultX, DefaultY, DefaultWidth, DefaultHeight, 
             SWP_NOZORDER
         );
+        UpdateWindow(sWin32_Gui.MainWindow);
         Win32_ResizeGuiComponents(DefaultWidth, DefaultHeight);
     }
     
