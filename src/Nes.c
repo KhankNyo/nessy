@@ -20,13 +20,22 @@ typedef struct NES
     MC6502 CPU;
     NESPPU PPU;
 
-    Bool8 DMA, DMAOutOfSync;
+    Bool8 DMA; 
+    Bool8 DMAOutOfSync;
     u16 DMAAddr;
     u8 DMAData;
 
     u8 ControllerStatusBuffer;
     u8 Ram[NES_CPU_RAM_SIZE];
 } NES;
+
+
+typedef enum EmulationMode 
+{
+    EMUMODE_SINGLE_STEP,
+    EMUMODE_SINGLE_FRAME,
+} EmulationMode;
+
 
 
 static NESDisassemblerState sDisassemblerState = {
@@ -40,8 +49,9 @@ static u32 *sBackBuffer = sScreenBuffers[0];
 static u32 *sReadyBuffer = sScreenBuffers[1];
 
 static uint sCurrentPalette;
-static Bool8 sNesSystemSingleStepCPU = false;
-static Bool8 sNesSystemSingleStepFrame = false;
+static EmulationMode sEmulationMode = EMUMODE_SINGLE_STEP;
+static Bool8 sEmulationHalted = false;
+static Bool8 sEmulationDone = false;
 static NES sNes = {
     .Cartridge = NULL,
     .Ram = { 0 },
@@ -371,30 +381,8 @@ static Bool8 Nes_StepClock(NES *Nes)
 
 void Nes_OnLoop(double ElapsedTime)
 {
-    static double ResidueTime = 1000.0/60.0;
-
-    if (sNesSystemSingleStepCPU)
-    {
-        if (sNes.Clk)
-        {
-            do {
-                Nes_StepClock(&sNes);
-            } while (sNes.CPU.CyclesLeft > 0);
-            sNes.Clk = 0;
-        }
-        ResidueTime = ElapsedTime;
-    }
-    else if (sNesSystemSingleStepFrame)
-    {
-        if (sNes.Clk)
-        {
-            do {
-            } while (!Nes_StepClock(&sNes));
-            sNes.Clk = 0;
-        }
-        ResidueTime = ElapsedTime;
-    }
-    else
+    static double ResidueTime;
+    if (!sEmulationHalted)
     {
         if (ResidueTime < ElapsedTime)
         {
@@ -405,10 +393,38 @@ void Nes_OnLoop(double ElapsedTime)
             } while (!FrameCompleted);
         }
     }
+    else
+    {
+        ResidueTime = ElapsedTime;
+        if (sEmulationDone)
+            return;
+
+        sEmulationDone = true;
+        switch (sEmulationMode)
+        {
+        case EMUMODE_SINGLE_STEP:
+        {
+            do {
+                Nes_StepClock(&sNes);
+            } while (sNes.CPU.CyclesLeft > 0);
+        } break;
+        case EMUMODE_SINGLE_FRAME:
+        {
+            Bool8 FrameDone;
+            do {
+                FrameDone = Nes_StepClock(&sNes);
+            } while (!FrameDone);
+        } break;
+        }
+    }
 }
 
 void Nes_AtExit(void)
 {
+    if (sNes.Cartridge)
+    {
+        NESCartridge_Destroy(sNes.Cartridge);
+    }
 }
 
 
@@ -416,22 +432,20 @@ void Nes_AtExit(void)
 
 void Nes_OnEmulatorToggleHalt(void)
 {
-    sNesSystemSingleStepCPU = !sNesSystemSingleStepCPU;
-    sNesSystemSingleStepFrame = false;
+    sEmulationHalted = !sEmulationHalted;
+    sEmulationDone = true;
 }
 
 void Nes_OnEmulatorSingleStep(void)
 {
-    sNesSystemSingleStepCPU = true;
-    sNesSystemSingleStepFrame = false;
-    sNes.Clk = 2;
+    sEmulationMode = EMUMODE_SINGLE_STEP;
+    sEmulationDone = false;
 }
 
 void Nes_OnEmulatorSingleFrame(void)
 {
-    sNesSystemSingleStepCPU = false;
-    sNesSystemSingleStepFrame = true;
-    sNes.Clk = 1;
+    sEmulationMode = EMUMODE_SINGLE_FRAME;
+    sEmulationDone = false;
 }
 
 void Nes_OnEmulatorReset(void)
