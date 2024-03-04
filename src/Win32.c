@@ -668,8 +668,8 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
 
     /* resize window */
     {
-        int DefaultWidth = 1350, 
-            DefaultHeight = 805;
+        int DefaultWidth = 1300, 
+            DefaultHeight = 845;
         int DefaultX = (GetSystemMetrics(SM_CXSCREEN) - DefaultWidth) / 2;
         int DefaultY = (GetSystemMetrics(SM_CYSCREEN) - DefaultHeight) / 2;
         SetWindowPos( 
@@ -677,8 +677,12 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
             DefaultX, DefaultY, DefaultWidth, DefaultHeight, 
             SWP_NOZORDER
         );
-        UpdateWindow(sWin32_Gui.MainWindow);
-        Win32_ResizeGuiComponents(DefaultWidth, DefaultHeight);
+        RECT ClientRect;
+        GetClientRect(sWin32_Gui.MainWindow, &ClientRect);
+        Win32_ResizeGuiComponents(
+            ClientRect.right - ClientRect.left, 
+            ClientRect.bottom - ClientRect.top
+        );
     }
     
     /* init timer */
