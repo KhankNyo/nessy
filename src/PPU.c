@@ -523,7 +523,14 @@ void NESPPU_ExternalWrite(NESPPU *This, u16 Address, u8 Byte)
     } break;
     case PPU_OAM_DATA:
     {
-        This->OAM.Bytes[This->OAMAddr++] = Byte;
+        /* NOTE: only writes increment OAM addr, 
+         * and writes are ignored during rendering (not quite, but best for emulation) */
+        Bool8 RenderingIsEnabled = This->Mask & (PPUMASK_SHOW_BG | PPUMASK_SHOW_SPR);
+        Bool8 InsideVisibleScanlines = IN_RANGE(-1, This->Scanline, 239);
+        if (!RenderingIsEnabled || !InsideVisibleScanlines)
+        {
+            This->OAM.Bytes[This->OAMAddr++] = Byte;
+        }
     } break;
     case PPU_SCROLL: 
     {
@@ -953,6 +960,12 @@ Bool8 NESPPU_StepClock(NESPPU *This)
         }
         else /* horizontal blank: 257..320, 337..340 */
         {
+            /* set this for clk in 257..320 */
+            if (IN_RANGE(257, This->Clk, 320))
+            {
+                This->OAMAddr = 0;
+            }
+
             /* horizontal blank entry: update x component and shifters */
             if (ShouldRender && This->Clk == 257)
             {
