@@ -3,16 +3,22 @@
 #include "Utils.h"
 #include "Common.h"
 #include "Cartridge.h"
-#define MAPPER_INTERFACE_IMPLEMENTATION
-#include "MapperInterface.h"
-#undef MAPPER_INTERFACE_IMPLEMENTATION
+
+#define MAPPER_INTERFACE_IMPL
+#   include "MapperInterface.h"
+#undef MAPPER_INTERFACE_IMPL 
+
+
 
 void NESCartridge_Destroy(NESCartridge *Cartridge)
 {
-    if (Cartridge->Rom)
+    if (Cartridge->MapperInterface)
     {
-        NESMapperInterface_Destroy(Cartridge->MapperInterface);
-        free(Cartridge->Rom);
+        switch (Cartridge->MapperID)
+        {
+        case 0: NESMapper000_Destroy(Cartridge->MapperInterface); break;
+        case 3: NESMapper003_Destroy(Cartridge->MapperInterface); break;
+        }
         *Cartridge = (NESCartridge){ 0 };
     }
 }
@@ -23,53 +29,65 @@ NESCartridge NESCartridge_Init(
     u8 MapperID, 
     NESNameTableMirroring MirroringMode)
 {
-    if (ChrRomSize == 0)
-    {
-        ChrRomSize = 8 * 1024;
-        ChrRom = NULL;
-    }
-
     NESCartridge Cartridge = {
-        .RomSizeBytes = PrgRomSize + ChrRomSize,
         .MirroringMode = MirroringMode,
+        .MapperID = MapperID,
+        .MapperInterface = NULL,
     };
-    /* create memory for both prg and chr rom */
-    Cartridge.Rom = malloc(Cartridge.RomSizeBytes);
-    DEBUG_ASSERT(Cartridge.Rom);
 
-    Cartridge.MapperInterface = NESMapperInterface_Init(
-        MapperID, 
-        Cartridge.Rom, 
-        PrgRom, PrgRomSize, 
-        ChrRom, ChrRomSize
-    );
-    if (NULL == Cartridge.MapperInterface)
-        NESCartridge_Destroy(&Cartridge);
-
+    switch (Cartridge.MapperID)
+    {
+    case 0: Cartridge.MapperInterface = NESMapper000_Init(PrgRom, PrgRomSize, ChrRom, ChrRomSize); break;
+    case 2: Cartridge.MapperInterface = NESMapper002_Init(PrgRom, PrgRomSize, ChrRom, ChrRomSize); break;
+    case 3: Cartridge.MapperInterface = NESMapper003_Init(PrgRom, PrgRomSize, ChrRom, ChrRomSize); break;
+    }
     return Cartridge;
 }
 
 
 u8 NESCartridge_Read(NESCartridge *Cartridge, u16 Address)
 {
-    return NESMapperInterface_Read(Cartridge->MapperInterface, Address);
+    switch (Cartridge->MapperID)
+    {
+    case 0: return NESMapper000_Read(Cartridge->MapperInterface, Address);
+    case 2: return NESMapper002_Read(Cartridge->MapperInterface, Address); 
+    case 3: return NESMapper003_Read(Cartridge->MapperInterface, Address); 
+    }
+    return 0;
 }
 
 void NESCartridge_Write(NESCartridge *Cartridge, u16 Address, u8 Byte)
 {    
-    NESMapperInterface_Write(Cartridge->MapperInterface, Address, Byte);
+    switch (Cartridge->MapperID)
+    {
+    case 0: NESMapper000_Write(Cartridge->MapperInterface, Address, Byte); break;
+    case 2: NESMapper002_Write(Cartridge->MapperInterface, Address, Byte); break;
+    case 3: NESMapper003_Write(Cartridge->MapperInterface, Address, Byte); break;
+    }
 }
 
 
 
 u8 NESCartridge_DebugCPURead(NESCartridge *Cartridge, u16 Address)
 {
-    return NESMapperInterface_DebugCPURead(Cartridge->MapperInterface, Address);
+    switch (Cartridge->MapperID)
+    {
+    case 0: return NESMapper000_DebugCPURead(Cartridge->MapperInterface, Address);
+    case 2: return NESMapper002_DebugCPURead(Cartridge->MapperInterface, Address);
+    case 3: return NESMapper003_DebugCPURead(Cartridge->MapperInterface, Address); 
+    }
+    return 0;
 }
 
 u8 NESCartridge_DebugPPURead(NESCartridge *Cartridge, u16 Address)
 {
-    return NESMapperInterface_DebugPPURead(Cartridge->MapperInterface, Address);
+    switch (Cartridge->MapperID)
+    {
+    case 0: return NESMapper000_DebugPPURead(Cartridge->MapperInterface, Address);
+    case 2: return NESMapper002_DebugPPURead(Cartridge->MapperInterface, Address);
+    case 3: return NESMapper003_DebugPPURead(Cartridge->MapperInterface, Address); 
+    }
+    return 0;
 }
 
 

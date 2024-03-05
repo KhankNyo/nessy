@@ -12,9 +12,8 @@ typedef enum NESNameTableMirroring
 } NESNameTableMirroring;
 typedef struct NESCartridge
 {
-    void *Rom;
-    isize RomSizeBytes;
     NESNameTableMirroring MirroringMode;
+    NESMapperID MapperID;
     NESMapperInterface *MapperInterface;
 } NESCartridge;
 
@@ -26,12 +25,12 @@ NESCartridge NESCartridge_Init(
     u8 MapperID, 
     NESNameTableMirroring MirroringMode
 );
+
 u8 NESCartridge_Read(NESCartridge *Cartridge, u16 Address);
-void NESCartridge_Write(NESCartridge *Cartridge, u16 Address, u8 Byte);
-
-
 u8 NESCartridge_DebugCPURead(NESCartridge *Cartridge, u16 Address);
 u8 NESCartridge_DebugPPURead(NESCartridge *Cartridge, u16 Address);
+
+void NESCartridge_Write(NESCartridge *Cartridge, u16 Address, u8 Byte);
 
 
 #endif /* CARTRIDGE_H */

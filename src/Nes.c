@@ -97,10 +97,8 @@ static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
     else if (IN_RANGE(0x4020, Address, 0x5FFF))
     {
     }
+    /* 0x6000 - 0xFFFF */
     /* Save Ram */
-    else if (IN_RANGE(0x6000, Address, 0x7FFF))
-    {
-    }
     /* Cartridge ROM */
     else if (sNes.Cartridge)
     {
@@ -138,10 +136,8 @@ static u8 NesInternal_ReadByte(void *UserData, u16 Address)
     else if (IN_RANGE(0x4020, Address, 0x5FFF))
     {
     }
+    /* 0x6000 - 0xFFFF */
     /* Save Ram */
-    else if (IN_RANGE(0x6000, Address, 0x7FFF))
-    {
-    }
     /* Cartridge ROM */
     else if (sNes.Cartridge)
     {
@@ -401,7 +397,7 @@ void Nes_OnLoop(double ElapsedTime)
         {
             do {
                 Nes_StepClock(&sNes);
-            } while (sNes.CPU.CyclesLeft > 0);
+            } while (sNes.CPU.CyclesLeft > 0 && !sNes.CPU.Halt);
             Nes_StepClock(&sNes);
             Nes_StepClock(&sNes);
             Nes_StepClock(&sNes);
