@@ -17,6 +17,7 @@ void NESCartridge_Destroy(NESCartridge *Cartridge)
         switch (Cartridge->MapperID)
         {
         case 0: NESMapper000_Destroy(Cartridge->MapperInterface); break;
+        case 2: NESMapper002_Destroy(Cartridge->MapperInterface); break;
         case 3: NESMapper003_Destroy(Cartridge->MapperInterface); break;
         }
         *Cartridge = (NESCartridge){ 0 };
@@ -47,6 +48,7 @@ NESCartridge NESCartridge_Init(
 
 u8 NESCartridge_Read(NESCartridge *Cartridge, u16 Address)
 {
+    DEBUG_ASSERT(Cartridge->MapperInterface != NULL);
     switch (Cartridge->MapperID)
     {
     case 0: return NESMapper000_Read(Cartridge->MapperInterface, Address);
@@ -58,6 +60,7 @@ u8 NESCartridge_Read(NESCartridge *Cartridge, u16 Address)
 
 void NESCartridge_Write(NESCartridge *Cartridge, u16 Address, u8 Byte)
 {    
+    DEBUG_ASSERT(Cartridge->MapperInterface != NULL);
     switch (Cartridge->MapperID)
     {
     case 0: NESMapper000_Write(Cartridge->MapperInterface, Address, Byte); break;
@@ -70,6 +73,7 @@ void NESCartridge_Write(NESCartridge *Cartridge, u16 Address, u8 Byte)
 
 u8 NESCartridge_DebugCPURead(NESCartridge *Cartridge, u16 Address)
 {
+    DEBUG_ASSERT(Cartridge->MapperInterface != NULL);
     switch (Cartridge->MapperID)
     {
     case 0: return NESMapper000_DebugCPURead(Cartridge->MapperInterface, Address);
@@ -81,6 +85,7 @@ u8 NESCartridge_DebugCPURead(NESCartridge *Cartridge, u16 Address)
 
 u8 NESCartridge_DebugPPURead(NESCartridge *Cartridge, u16 Address)
 {
+    DEBUG_ASSERT(Cartridge->MapperInterface != NULL);
     switch (Cartridge->MapperID)
     {
     case 0: return NESMapper000_DebugPPURead(Cartridge->MapperInterface, Address);

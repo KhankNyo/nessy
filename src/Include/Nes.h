@@ -18,7 +18,7 @@
 
 typedef struct Nes_DisplayableStatus 
 {
-    u16 PC, SP;
+    u16 PC, SP, StackValue;
     u8 A, X, Y;
     u8 N, V, U, B, D, I, Z, C;
 

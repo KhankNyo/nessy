@@ -75,6 +75,8 @@ void Nes_Disassemble(
                 Cartridge, 
                 Nes_DisRead
             );
+            if (InstructionSize < -1)
+                continue;
             This->DisasmBuffer[i].ByteCount = InstructionSize;
             This->DisasmBuffer[i].Address = PC;
 

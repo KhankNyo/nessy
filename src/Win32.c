@@ -370,7 +370,7 @@ static LRESULT CALLBACK Win32_StatusWndProc(HWND Window, UINT Msg, WPARAM WParam
                 "X:[{x2}]\n", (u32)sWin32_DisplayableStatus.X,
                 "Y:[{x2}]\n", (u32)sWin32_DisplayableStatus.Y, 
                 "PC:[{x4}]\n", (u32)sWin32_DisplayableStatus.PC, 
-                "SP:[{x4}]\n", (u32)sWin32_DisplayableStatus.SP,
+                "SP:[{x4}]: {x4}\n", (u32)sWin32_DisplayableStatus.SP, (u32)sWin32_DisplayableStatus.StackValue,
                 "Flags: {s}", Flags,
                 NULL
             );

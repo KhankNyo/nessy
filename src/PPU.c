@@ -227,6 +227,7 @@ void NESPPU_Reset(NESPPU *This)
 {
     This->Clk = 0;
     This->Scanline = 0;
+    This->ReadBuffer = 0;
     This->Ctrl = 0;
     This->Mask = 0;
     This->Loopy.w = 0;

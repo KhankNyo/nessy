@@ -59,11 +59,11 @@ u8 NESMapper003_Read(NESMapperInterface *MapperInterface, u16 Addr)
 {
     NESMapper003 *Mapper = MapperInterface;
     /* palette */
-    if (IN_RANGE(0x0000, Addr, 0x2000))
+    if (IN_RANGE(0x0000, Addr, 0x1FFF))
     {
         u32 PhysAddr = Addr & (BANK_SIZE - 1);
-        PhysAddr |= Mapper->CurrentChrBank * BANK_SIZE;
-        return Mp003_GetChrPtr(Mapper)[PhysAddr];
+        u32 BaseAddr = Mapper->CurrentChrBank * BANK_SIZE;
+        return Mp003_GetChrPtr(Mapper)[BaseAddr + PhysAddr];
     }
     /* prg rom */
     else if (IN_RANGE(0x8000, Addr, 0xFFFF))
@@ -79,11 +79,11 @@ void NESMapper003_Write(NESMapperInterface *MapperInterface, u16 Addr, u8 Byte)
 {
     NESMapper003 *Mapper = MapperInterface;
     /* palette */
-    if (IN_RANGE(0x0000, Addr, 0x2000))
+    if (IN_RANGE(0x0000, Addr, 0x1FFF))
     {
         u32 PhysAddr = Addr & (BANK_SIZE - 1);
-        PhysAddr |= Mapper->CurrentChrBank * BANK_SIZE;
-        Mp003_GetChrPtr(Mapper)[PhysAddr] = Byte;
+        u32 BaseAddr = Mapper->CurrentChrBank * BANK_SIZE;
+        Mp003_GetChrPtr(Mapper)[BaseAddr + PhysAddr] = Byte;
     }
     /* prg rom */
     else if (IN_RANGE(0x8000, Addr, 0xFFFF))

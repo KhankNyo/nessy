@@ -65,6 +65,7 @@ static NES sNes = {
 static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
 {
     NES *Nes = UserData;
+        static char txt[0x2000];
 
     /* ram range */
     if (Address < 0x2000)
@@ -96,6 +97,10 @@ static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
     /* Expansion Rom */
     else if (IN_RANGE(0x4020, Address, 0x5FFF))
     {
+    }
+    else if (IN_RANGE(0x6000, Address, 0x7FFF))
+    {
+        txt[Address % 0x2000] = Byte;
     }
     /* 0x6000 - 0xFFFF */
     /* Save Ram */
@@ -253,12 +258,16 @@ ErrorFileTooSmall:
 
 Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(void)
 {
+    u16 StackValue = (u16)sNes.Ram[0x100 + (u8)(sNes.CPU.SP + 1)];
+    StackValue |= (u16)sNes.Ram[0x100 + (u8)(sNes.CPU.SP + 2)] << 8;
+
     Nes_DisplayableStatus Status = {
         .A = sNes.CPU.A,
         .X = sNes.CPU.X,
         .Y = sNes.CPU.Y,
         .PC = sNes.CPU.PC,
         .SP = sNes.CPU.SP + 0x100,
+        .StackValue = StackValue,
 
         .N = MC6502_FlagGet(sNes.CPU.Flags, FLAG_N),
         .Z = MC6502_FlagGet(sNes.CPU.Flags, FLAG_Z),
