@@ -53,7 +53,7 @@ NESMapperInterface *NESMapper000_Init(const void *PrgRom, isize PrgRomSize, cons
     else /* no chr rom */
     {
         isize ChrRamSize = 8*1024;
-        isize TotalSize = PrgRomSize + ChrRamSize;
+        isize TotalSize = sizeof *Mapper + PrgRomSize + ChrRamSize;
         Mapper = malloc(TotalSize);
         DEBUG_ASSERT(Mapper);
 

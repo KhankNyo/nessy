@@ -22,7 +22,8 @@ typedef struct NES
 
     Bool8 DMA; 
     Bool8 DMAOutOfSync;
-    u16 DMAAddr;
+    u16 DMASrc;
+    u8 DMADst;
     u8 DMAData;
 
     u8 ControllerStatusBuffer;
@@ -58,14 +59,14 @@ static NES sNes = {
 
     .DMA = false,
     .DMAOutOfSync = false,
-    .DMAAddr = 0,
+    .DMASrc = 0,
+    .DMADst = 0,
 };
 
 
 static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
 {
     NES *Nes = UserData;
-        static char txt[0x2000];
 
     /* ram range */
     if (Address < 0x2000)
@@ -86,7 +87,7 @@ static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
     /* Object Attribute Memory direct access (OAM DMA) */
     else if (Address == 0x4014)
     {
-        Nes->DMAAddr = (u16)Byte << 8;
+        Nes->DMASrc = (u16)Byte << 8;
         Nes->DMA = true;
         Nes->DMAOutOfSync = true;
     }
@@ -97,10 +98,6 @@ static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
     /* Expansion Rom */
     else if (IN_RANGE(0x4020, Address, 0x5FFF))
     {
-    }
-    else if (IN_RANGE(0x6000, Address, 0x7FFF))
-    {
-        txt[Address % 0x2000] = Byte;
     }
     /* 0x6000 - 0xFFFF */
     /* Save Ram */
@@ -350,7 +347,10 @@ static Bool8 Nes_StepClock(NES *Nes)
         else if (Nes->DMAOutOfSync)
         {
             if (Nes->Clk % 2 == 1)
+            {
                 Nes->DMAOutOfSync = false;
+                Nes->DMADst = Nes->PPU.OAMAddr;
+            }
             /* else wait until CPU clk is odd, and then start syncing */
         }
         else
@@ -358,16 +358,15 @@ static Bool8 Nes_StepClock(NES *Nes)
             /* read cpu memory on even clk */
             if (Nes->Clk % 2 == 0)
             {
-                Nes->DMAData = NesInternal_ReadByte(Nes, Nes->DMAAddr);
+                Nes->DMAData = NesInternal_ReadByte(Nes, Nes->DMASrc++);
             }
             /* write to ppu memory on odd clk */
             else
             {
-                u8 OAMAddr = Nes->DMAAddr++ & 0x00FF;
-                Nes->PPU.OAM.Bytes[OAMAddr] = Nes->DMAData;
+                Nes->PPU.OAM.Bytes[Nes->DMADst++] = Nes->DMAData;
 
                 /* transfer is complete (1 page has wrapped) */
-                if (OAMAddr == 0xFF)
+                if ((Nes->DMASrc & 0xFF) == 0)
                 {
                     Nes->DMA = false;
                     Nes->DMAOutOfSync = true;

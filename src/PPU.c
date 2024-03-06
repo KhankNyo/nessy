@@ -80,6 +80,7 @@ struct NESPPU
     u8 Ctrl;
     u8 Mask;
     u8 Status;
+    uint ClkSinceVBlank;
     Bool8 CurrentFrameIsOdd;
     Bool8 SupressNMIThisFrame;
     Bool8 ShouldNotSetVBlankThisFrame;
@@ -226,6 +227,7 @@ NESPPU NESPPU_Init(
 void NESPPU_Reset(NESPPU *This)
 {
     This->Clk = 0;
+    This->ClkSinceVBlank = 0;
     This->Scanline = 0;
     This->ReadBuffer = 0;
     This->Ctrl = 0;
@@ -479,13 +481,15 @@ u8 NESPPU_ExternalRead(NESPPU *This, u16 Address)
         if (This->Loopy.v >= 0x3F00) /* palette addr: read directly */
         {
             ReadValue = NESPPU_ReadInternalMemory(This, This->Loopy.v);
+            /* NOTE: also read the underlying memory, AKA 0x2F00~0x2FFF */
+            This->ReadBuffer = NESPPU_ReadInternalMemory(This, 0x2F00 | (This->Loopy.v & 0xFF));
         }
         else /* other addr: buffer the read, return prev read */
         {
             ReadValue = This->ReadBuffer;
+            This->ReadBuffer = NESPPU_ReadInternalMemory(This, This->Loopy.v);
         }
         /* NOTE: always read into buffer, even when reading palette */
-        This->ReadBuffer = NESPPU_ReadInternalMemory(This, This->Loopy.v);
 
         This->Loopy.v += (This->Ctrl & PPUCTRL_INC32)? 32 : 1;
         return ReadValue;
@@ -894,6 +898,11 @@ Bool8 NESPPU_StepClock(NESPPU *This)
         ShouldRenderBackground = false;
     uint ShouldRender = ShouldRenderBackground || ShouldRenderForeground;
 
+    if (This->ClkSinceVBlank)
+        This->ClkSinceVBlank++;
+    if (This->ClkSinceVBlank == 4*(2270 + 199)) /* magic */
+        This->Status &= ~PPUSTATUS_VBLANK;
+
     /* putting these magic numbers in variable name makes this harder to read */
     /* visible scanlines (-1 is pre-render) */
     if (IN_RANGE(-1, This->Scanline, 239))
@@ -904,8 +913,7 @@ Bool8 NESPPU_StepClock(NESPPU *This)
             if (This->Clk == 1)
             {
                 This->Status &= ~(
-                    PPUSTATUS_VBLANK 
-                    | PPUSTATUS_SPR0_HIT 
+                    PPUSTATUS_SPR0_HIT 
                     | PPUSTATUS_SPR_OVERFLOW
                 );
 
@@ -1028,7 +1036,11 @@ Bool8 NESPPU_StepClock(NESPPU *This)
     else if (This->Scanline == 241 && This->Clk == 1)
     {
         if (!This->ShouldNotSetVBlankThisFrame)
+        {
             This->Status |= PPUSTATUS_VBLANK;
+            This->ClkSinceVBlank = 1;
+        }
+
         else This->ShouldNotSetVBlankThisFrame = false;
 
         if (This->SupressNMIThisFrame)
