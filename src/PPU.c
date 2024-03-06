@@ -1,6 +1,9 @@
 #ifndef NES_PPU_C
 #define NES_PPU_C
 
+// on NMI 
+//https://www.nesdev.org/wiki/NMI
+
 #include "Common.h"
 #include "Cartridge.h"
 #include "Utils.h"
