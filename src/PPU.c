@@ -24,8 +24,8 @@ typedef void (*NESPPU_NmiCallback)(NESPPU *);
 #define PPUCTRL_SLAVE_MODE      (1 << 6)  /* unused */
 #define PPUCTRL_NMI_ENABLE      (1 << 7)
 /* STATUS */
-#define PPUSTATUS_SPR0_HIT      (0x40)
-#define PPUSTATUS_SPR_OVERFLOW  (1 << 6)
+#define PPUSTATUS_SPR_OVERFLOW  (1 << 5)
+#define PPUSTATUS_SPR0_HIT      (1 << 6)
 #define PPUSTATUS_VBLANK        (1 << 7)
 /* MASK */
 #define PPUMASK_GRAYSCALE       (1 << 0)
@@ -469,7 +469,7 @@ u8 NESPPU_ExternalRead(NESPPU *This, u16 Address)
         }
         This->Status &= ~PPUSTATUS_VBLANK;
         This->Loopy.w = 0;
-        return Status;
+        return Status | (This->ReadBuffer & 0x1F);
     } break;
     case PPU_OAM_ADDR: /* read not allowed */ break;
     case PPU_OAM_DATA:

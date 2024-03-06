@@ -22,8 +22,8 @@ typedef struct NES
 
     Bool8 DMA; 
     Bool8 DMAOutOfSync;
-    u16 DMASrc;
-    u8 DMADst;
+    u16 DMAAddr;
+    u16 DMASaveAddr;
     u8 DMAData;
 
     u8 ControllerStatusBuffer;
@@ -59,8 +59,7 @@ static NES sNes = {
 
     .DMA = false,
     .DMAOutOfSync = false,
-    .DMASrc = 0,
-    .DMADst = 0,
+    .DMAAddr = 0,
 };
 
 
@@ -87,7 +86,8 @@ static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
     /* Object Attribute Memory direct access (OAM DMA) */
     else if (Address == 0x4014)
     {
-        Nes->DMASrc = (u16)Byte << 8;
+        Nes->DMAAddr = (u16)Byte << 8;
+        Nes->DMASaveAddr = Nes->DMAAddr;
         Nes->DMA = true;
         Nes->DMAOutOfSync = true;
     }
@@ -349,7 +349,7 @@ static Bool8 Nes_StepClock(NES *Nes)
             if (Nes->Clk % 2 == 1)
             {
                 Nes->DMAOutOfSync = false;
-                Nes->DMADst = Nes->PPU.OAMAddr;
+                Nes->DMASaveAddr = Nes->PPU.OAMAddr;
             }
             /* else wait until CPU clk is odd, and then start syncing */
         }
@@ -358,18 +358,20 @@ static Bool8 Nes_StepClock(NES *Nes)
             /* read cpu memory on even clk */
             if (Nes->Clk % 2 == 0)
             {
-                Nes->DMAData = NesInternal_ReadByte(Nes, Nes->DMASrc++);
+                Nes->DMAData = NesInternal_ReadByte(Nes, Nes->DMAAddr);
             }
             /* write to ppu memory on odd clk */
             else
             {
-                Nes->PPU.OAM.Bytes[Nes->DMADst++] = Nes->DMAData;
+                u16 DMAAddrPrev = Nes->DMAAddr++;
+                NESPPU_ExternalWrite(&Nes->PPU, PPU_OAM_DATA, Nes->DMAData);
 
                 /* transfer is complete (1 page has wrapped) */
-                if ((Nes->DMASrc & 0xFF) == 0)
+                if ((DMAAddrPrev & 0xFF00) != (Nes->DMAAddr & 0xFF00))
                 {
                     Nes->DMA = false;
                     Nes->DMAOutOfSync = true;
+                    Nes->PPU.OAMAddr = Nes->DMASaveAddr;
                 }
             }
         }

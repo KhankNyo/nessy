@@ -171,13 +171,10 @@ static u16 GetEffectiveAddress(MC6502 *This, u16 Opcode)
         u8 AddressPointer = (u8)(FetchByte(This) + This->X);
         u16 Address = This->ReadByte(This->UserData, (u8)AddressPointer++);
         Address |= (u16)This->ReadByte(This->UserData, AddressPointer) << 8;
-
-        This->CyclesLeft += 4;
         return Address;
     } break;
     case 1: /* zpg */
     {
-        This->CyclesLeft += 1;
         return FetchByte(This);
     } break;
     case 2: /* #imm */
@@ -186,7 +183,6 @@ static u16 GetEffectiveAddress(MC6502 *This, u16 Opcode)
     } break;
     case 3: /* abs */
     {
-        This->CyclesLeft += 2;
         return FetchWord(This);
     } break;
     case 4: /* (ind),Y */
@@ -197,14 +193,14 @@ static u16 GetEffectiveAddress(MC6502 *This, u16 Opcode)
         u16 IndexedAddress = Address + This->Y;
 
         /* page boundary crossing */
-        This->CyclesLeft += 3 + (((Address >> 8) != (IndexedAddress >> 8)) || 0x91 == Opcode || RMW); /* STA (ind),y */
+        Bool8 PageBoundaryCrossed = (Address >> 8) != (IndexedAddress >> 8);
+        This->CyclesLeft = PageBoundaryCrossed;
         return IndexedAddress;
     } break;
     case 5: /* zpg,X/Y */
     {
         uint IndexRegister = UseRegY? This->Y : This->X;
         u8 Address = FetchByte(This) + IndexRegister;
-        This->CyclesLeft += 2;
         return Address;
     } break;
     case 6: /* abs,Y */
@@ -212,7 +208,8 @@ static u16 GetEffectiveAddress(MC6502 *This, u16 Opcode)
         u16 Address = FetchWord(This);
         u16 IndexedAddress = Address + This->Y;
 
-        This->CyclesLeft += 2 + ((Address >> 8) != ((IndexedAddress >> 8)) || 0x99 == Opcode || RMW); /* STA abs,y */
+        Bool8 PageBoundaryCrossed = (Address >> 8) != (IndexedAddress >> 8);
+        This->CyclesLeft = PageBoundaryCrossed;
         return IndexedAddress;
     } break;
     case 7: /* abs,X/Y */
@@ -222,9 +219,8 @@ static u16 GetEffectiveAddress(MC6502 *This, u16 Opcode)
         u16 Address = FetchWord(This);
         u16 IndexedAddress = Address + IndexRegister;
 
-        This->CyclesLeft += 2 
-            + (((Address >> 8) != (IndexedAddress >> 8)) 
-                || RMW);
+        Bool8 PageBoundaryCrossed = (Address >> 8) != (IndexedAddress >> 8);
+        This->CyclesLeft = PageBoundaryCrossed;
         return IndexedAddress;
     } break;
     default: return 0xdead;
@@ -394,7 +390,7 @@ void MC6502_Interrupt(MC6502 *This, u16 InterruptVector)
     }
     else
     {
-        This->CyclesLeft = 7;
+        This->CyclesLeft += 7;
     }
 }
 
@@ -405,7 +401,12 @@ void MC6502_StepClock(MC6502 *This)
     TEST_NZ(Tmp);\
     SET_FLAG(FLAG_C, Tmp <= 0xFF);\
 } while (0) 
-    if (This->Halt || This->CyclesLeft-- > 0)
+    if (This->CyclesLeft > 0)
+    {
+        This->CyclesLeft--;
+        return;
+    }
+    if (This->Halt)
         return;
 
     This->CyclesLeft = 0;
@@ -430,13 +431,10 @@ void MC6502_StepClock(MC6502 *This)
 
         /* fetch interrupt vector */
         FetchVector(This, VEC_IRQ);
-
-        This->CyclesLeft = 7;
     } break;
     case 0x4C: /* JMP abs */ 
     {
         This->PC = FetchWord(This);
-        This->CyclesLeft = 3;
     } break;
     case 0x6C: /* JMP (ind) */
     {
@@ -450,7 +448,6 @@ void MC6502_StepClock(MC6502 *This)
         Address |= (u16)This->ReadByte(This->UserData, AddressPointer) << 8;
 
         This->PC = Address;
-        This->CyclesLeft = 5;
     } break;
     case 0x20: /* JSR */
     {
@@ -463,48 +460,40 @@ void MC6502_StepClock(MC6502 *This)
         SubroutineAddress |= (u16)FetchByte(This) << 8;
         This->PC = SubroutineAddress;
 
-        This->CyclesLeft = 6;
     } break;
     case 0x40: /* RTI */ 
     {
         PopFlags(This);
         This->PC = PopWord(This);
-        This->CyclesLeft = 6;
     } break;
     case 0x60: /* RTS */
     {
         This->PC = PopWord(This) + 1;
-        This->CyclesLeft = 6;
     } break;
 
     /* stack */
     case 0x08: /* PHP */
     {
         PushFlags(This); 
-        This->CyclesLeft = 3;
     } break;
     case 0x28: /* PLP */
     {
         PopFlags(This); 
-        This->CyclesLeft = 3;
     } break;
     case 0x48: /* PHA */
     {
         PushByte(This, This->A); 
-        This->CyclesLeft = 3;
     } break;
     case 0x68: /* PLA */
     {
         This->A = PopByte(This);
         TEST_NZ(This->A);
-        This->CyclesLeft = 4;
     } break;
 
     /* by 1 instructions on x and y */
 #define INCREMENT(Register, Value) do {\
     This->Register += Value;\
     TEST_NZ(This->Register);\
-    This->CyclesLeft = 2;\
 } while (0)
     case 0x88: /* DEY */ INCREMENT(Y, -1); break;
     case 0xCA: /* DEX */ INCREMENT(X, -1); break;
@@ -517,13 +506,11 @@ void MC6502_StepClock(MC6502 *This)
     {
         This->Y = FetchByte(This);
         TEST_NZ(This->Y);
-        This->CyclesLeft = 2;
     } break;
     case 0xA2: /* LDX */
     {
         This->X = FetchByte(This);
         TEST_NZ(This->X);
-        This->CyclesLeft = 2;
     } break;
     case 0xC0: /* CPY */
     {
@@ -531,7 +518,6 @@ void MC6502_StepClock(MC6502 *This)
             This->Y, 
             FetchByte(This)
         );
-        This->CyclesLeft = 2;
     } break;
     case 0xE0: /* CPX */
     {
@@ -539,14 +525,12 @@ void MC6502_StepClock(MC6502 *This)
             This->X,
             FetchByte(This)
         );
-        This->CyclesLeft = 2;
     } break;
 
     /* transfers */
 #define TRANSFER(Dst, Src) do {\
     This->Dst = This->Src;\
     TEST_NZ(This->Dst);\
-    This->CyclesLeft = 2;\
 } while (0)
     case 0xAA: /* TAX */ TRANSFER(X, A);  break;
     case 0xA8: /* TAY */ TRANSFER(Y, A);  break;
@@ -557,7 +541,6 @@ void MC6502_StepClock(MC6502 *This)
     {
         This->SP = This->X; 
         /* does not set flags */
-        This->CyclesLeft = 2;
     } break;
 #undef TRANSFER
 
@@ -565,22 +548,18 @@ void MC6502_StepClock(MC6502 *This)
     case 0x0A: /* ASL */
     {
         This->A = ASL(This, This->A);
-        This->CyclesLeft = 2;
     } break;
     case 0x2A: /* ROL */
     {
         This->A = ROL(This, This->A);
-        This->CyclesLeft = 2;
     } break;
     case 0x4A: /* LSR */
     {
         This->A = LSR(This, This->A);
-        This->CyclesLeft = 2;
     } break;
     case 0x6A: /* ROR */
     {
         This->A = ROR(This, This->A);
-        This->CyclesLeft = 2;
     } break;
 
 
@@ -588,12 +567,12 @@ void MC6502_StepClock(MC6502 *This)
     case 0x80: /* nop imm */
     {
         FetchByte(This);
-        This->CyclesLeft = 2;
     } break;
     /* group cc = 1 nops */
     case 0x89:
     /* official nop */
-    case 0xEA: This->CyclesLeft = 2; break;
+    case 0xEA: 
+    break;
 
     /* illegal nops with addressing mode in cc = 0 */
     case 0x04:
@@ -613,7 +592,6 @@ void MC6502_StepClock(MC6502 *This)
     case 0xDC:
     case 0xFC: /* NOP addrm */
     {
-        This->CyclesLeft = 2;
         GetEffectiveAddress(This, Opcode);
     } break;
     case 0x9C: /* SHY abs,x */
@@ -621,7 +599,6 @@ void MC6502_StepClock(MC6502 *This)
         u16 Address = FetchWord(This);
         u8 Byte = This->Y & ((Address >> 8) + 1);
         This->WriteByte(This->UserData, Address + This->Y, Byte);
-        This->CyclesLeft = 5;
     } break;
 
     /* group cc = 2 illegal */
@@ -630,7 +607,6 @@ void MC6502_StepClock(MC6502 *This)
         u16 Address = FetchWord(This);
         u8 Byte = This->X & ((Address >> 8) + 1);
         This->WriteByte(This->UserData, Address + This->Y, Byte);
-        This->CyclesLeft = 5;
     } break;
 
     /* group cc = 3 oddball illegals */
@@ -640,7 +616,6 @@ void MC6502_StepClock(MC6502 *This)
         u8 Tmp = This->A & FetchByte(This);
         TEST_NZ(Tmp);
         SET_FLAG(FLAG_C, Tmp & 0x80);
-        This->CyclesLeft = 2;
     } break;
     case 0x4B: /* ALR #imm */
     {
@@ -648,7 +623,6 @@ void MC6502_StepClock(MC6502 *This)
         Tmp >>= 1;
         TEST_NZ(Tmp);
         SET_FLAG(FLAG_C, Tmp & 0x80);
-        This->CyclesLeft = 2;
     } break;
     case 0x6B: /* ARR #imm */
     {
@@ -657,7 +631,6 @@ void MC6502_StepClock(MC6502 *This)
         u16 Result = (u16)Left + (u16)Byte;
         SetAdditionFlags(This, Left, Byte, Result);
         ROR(This, This->A);
-        This->CyclesLeft = 2;
     } break;
     case 0x8B: /* ANE #imm */
     {
@@ -665,7 +638,6 @@ void MC6502_StepClock(MC6502 *This)
             & FetchByte(This) 
             & This->X;
         TEST_NZ(This->A);
-        This->CyclesLeft = 2;
     } break;
     case 0xAB: /* LXA, aka LAX immediate */ 
     {
@@ -673,7 +645,6 @@ void MC6502_StepClock(MC6502 *This)
         u8 Byte = FetchByte(This) & Magic;
         This->A = Byte;
         This->X = Byte;
-        This->CyclesLeft = 2;
     } break;
     case 0xCB: 
     /* SBX #imm: 
@@ -687,12 +658,10 @@ void MC6502_StepClock(MC6502 *This)
         u8 Immediate = FetchByte(This);
         DO_COMPARISON(Value, Immediate);
         This->X = Value - Immediate;
-        This->CyclesLeft = 2;
     } break;
     case 0xEB: /* USBC, same as SBC #imm */
     {
         SBC(This, FetchByte(This));
-        This->CyclesLeft = 2;
     } break;
     case 0x9B: /* TAS abs,y */
     {
@@ -701,7 +670,6 @@ void MC6502_StepClock(MC6502 *This)
         u8 Value = This->A & This->X & (u8)((Address >> 8) + 1);
         This->WriteByte(This->UserData, Address, Value);
 
-        This->CyclesLeft = 5;
     } break;
     case 0xBB: /* LAS abs,y */
     {
@@ -712,7 +680,8 @@ void MC6502_StepClock(MC6502 *This)
         This->X = Byte;
         This->SP = Byte;
 
-        This->CyclesLeft = 4 + ((IndexedAddress >> 8) != (Address >> 8));
+        Bool8 PageBoundaryCrossed = (IndexedAddress >> 8) != (Address >> 8);
+        This->CyclesLeft = PageBoundaryCrossed;
     } break;
     case 0x9F: /* SHA abs,y */
     {
@@ -720,8 +689,6 @@ void MC6502_StepClock(MC6502 *This)
 
         u8 Byte = This->A & This->X & ((Address >> 8) + 1);
         This->WriteByte(This->UserData, Address + This->Y, Byte);
-
-        This->CyclesLeft = 5;
     } break;
     case 0x93: /* SHA (ind),y */
     {
@@ -731,8 +698,6 @@ void MC6502_StepClock(MC6502 *This)
 
         u8 Byte = This->A & This->X & ((Address >> 8) + 1);
         This->WriteByte(This->UserData, Address + This->Y, Byte);
-
-        This->CyclesLeft = 6;
     } break;
 
 
@@ -755,7 +720,6 @@ void MC6502_StepClock(MC6502 *This)
             case 6: /* CLD */ SET_FLAG(FLAG_D, 0); break;
             case 7: /* SED */ SET_FLAG(FLAG_D, 1); break;
             }
-            This->CyclesLeft = 2;
         }
         else if (bbb == 4) /* branch */
         {
@@ -771,7 +735,6 @@ void MC6502_StepClock(MC6502 *This)
             };
 
             uint ffc = AAA(Opcode);
-            This->CyclesLeft = 2; /* assumes not branching */
             if ((ffc & 1) == GET_FLAG(Lookup[ffc >> 1]))
             {
                 u16 TargetAddress = 
@@ -780,15 +743,16 @@ void MC6502_StepClock(MC6502 *This)
                      + (i32)BranchOffset);
 
                 /* if crossing page boundary
-                 * +2 else +1 cycles */
-                This->CyclesLeft += 1 + ((TargetAddress >> 8) != (This->PC >> 8));
+                 * +2 
+                 * else +1 cycles */
+                Bool8 PageBoundaryCrossed = (TargetAddress >> 8) != (This->PC >> 8);
+                This->CyclesLeft = 1 + PageBoundaryCrossed;
 
                 This->PC = TargetAddress;
             }
         }
         else /* STY, LDY, CPY, CPX */
         {
-            This->CyclesLeft = 2;
             u16 Address = GetEffectiveAddress(This, Opcode);
             switch (AAA(Opcode))
             {
@@ -833,9 +797,7 @@ void MC6502_StepClock(MC6502 *This)
     } break;
     case 1: /* accumulator instructions */
     {
-        This->CyclesLeft = 2;
         u16 Address = GetEffectiveAddress(This, Opcode);
-
         switch (AAA(Opcode))
         {
         case 0: /* ORA */
@@ -896,13 +858,11 @@ void MC6502_StepClock(MC6502 *This)
         }
         if (bbb == 6) /* NOP impl */
         {
-            This->CyclesLeft = 2;
             break;
         }
         if (bbb == 0) /* NOP #imm */
         {
             FetchByte(This);
-            This->CyclesLeft = 2;
             break;
         }
 
@@ -910,13 +870,11 @@ void MC6502_StepClock(MC6502 *This)
         if (aaa == 4) /* STX */
         {
             This->WriteByte(This->UserData, Address, This->X);
-            This->CyclesLeft += 2;
         }
         else if (aaa == 5) /* LDX */
         {
             This->X = This->ReadByte(This->UserData, Address);
             TEST_NZ(This->X);
-            This->CyclesLeft += 2;
         }
         else /* RMW */
         {
@@ -934,7 +892,6 @@ void MC6502_StepClock(MC6502 *This)
             u8 Byte = RMWReadByte(This, Address);
             u8 Result = RMW(This, Byte);
             This->WriteByte(This->UserData, Address, Result);
-            This->CyclesLeft += 4;
         }
     } break;
     case 3: /* illegal instructions */
@@ -997,11 +954,30 @@ void MC6502_StepClock(MC6502 *This)
             } break;
             }
             This->WriteByte(This->UserData, Address, IntermediateResult);
-            This->CyclesLeft += 4;
         }
     } break;
     } break;
     }
+    static u8 ClockLookup[0x100] = {
+        7, 6, 0, 8, 3, 3, 5, 5, 3, 2, 2, 2, 4, 4, 6, 6,
+        2, 5, 0, 8, 4, 4, 4, 6, 2, 4, 2, 7, 4, 4, 7, 7,
+        6, 6, 0, 8, 3, 3, 5, 5, 4, 2, 2, 2, 4, 4, 6, 6, 
+        2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7, 
+        6, 6, 0, 8, 3, 3, 5, 5, 3, 2, 2, 2, 3, 4, 6, 6,
+        2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
+        6, 6, 0, 8, 3, 3, 5, 5, 4, 2, 2, 2, 5, 3, 6, 6, 
+        2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7, 
+        2, 6, 2, 6, 3, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 4, 
+        2, 6, 0, 6, 4, 4, 4, 4, 2, 5, 2, 5, 5, 5, 5, 5,
+        2, 6, 2, 6, 3, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 4,
+        2, 5, 0, 5, 4, 4, 4, 4, 2, 4, 2, 4, 4, 4, 4, 4,
+        2, 6, 2, 8, 3, 3, 5, 5, 2, 2, 2, 2, 4, 4, 6, 6, 
+        2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
+        2, 6, 2, 8, 3, 3, 5, 5, 2, 2, 2, 2, 4, 4, 6, 6, 
+        2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7
+    };
+    This->CyclesLeft += ClockLookup[Opcode];
+
 #undef DO_COMPARISON
 }
 
