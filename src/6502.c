@@ -163,7 +163,6 @@ static u16 GetEffectiveAddress(MC6502 *This, u16 Opcode)
     uint cc  = CC(Opcode);
 
     Bool8 UseRegY = cc >= 2 && (aaa == 4 || aaa == 5);
-    Bool8 RMW = cc >= 2 && !IN_RANGE(4, aaa, 5);
     switch (bbb)
     {
     case 0: /* (ind,X) */

@@ -5,14 +5,12 @@
 #include "Utils.h"
 
 
-
-#define BANK_SIZE (16 * 1024)
-
 typedef struct NESMapper002 
 {
     u32 PrgRomSize;
-    u32 ChrMemSize;
+    u32 ChrRamSize;
     u32 CurrentLowRomBank;
+    u32 PrgBankSize;
     /* data after */
 } NESMapper002;
 
@@ -29,40 +27,30 @@ static u8 *Mp002_GetChrPtr(NESMapper002 *Mp002)
 }
 
 
-NESMapperInterface *NESMapper002_Init(const void *PrgRom, isize PrgRomSize, const void *ChrRom, isize ChrRomSize)
+NESMapperInterface *NESMapper002_Init(const void *PrgRom, isize PrgRomSize, isize ChrRamSize)
 {
     NESMapper002 *Mapper = NULL;
-    if (ChrRomSize)
-    {
-        isize TotalSize = sizeof *Mapper + PrgRomSize + ChrRomSize;
-        Mapper = malloc(TotalSize);
-        DEBUG_ASSERT(Mapper);
+    isize TotalSize = sizeof(*Mapper) + PrgRomSize + ChrRamSize;
+    Mapper = malloc(TotalSize);
+    DEBUG_ASSERT(Mapper);
 
-        Mapper->ChrMemSize = ChrRomSize;
-        Mapper->PrgRomSize = PrgRomSize;
-        Mapper->CurrentLowRomBank = 0;
+    Mapper->ChrRamSize = ChrRamSize;
+    Mapper->PrgRomSize = PrgRomSize;
+    Mapper->CurrentLowRomBank = 0;
+    Mapper->PrgBankSize = 16 * 1024;
 
-        /* copy the prg and chr rom */
-        Memcpy(Mp002_GetPrgRomPtr(Mapper), PrgRom, PrgRomSize);
-        Memcpy(Mp002_GetChrPtr(Mapper), ChrRom, ChrRomSize);
-    }
-    else /* chr ram */
-    {
-        u16 ChrRamSize = 8*1024;
-        isize TotalSize = sizeof *Mapper + PrgRomSize + ChrRamSize;
-        Mapper = malloc(TotalSize);
-        DEBUG_ASSERT(Mapper);
-
-        Mapper->ChrMemSize = ChrRamSize;
-        Mapper->PrgRomSize = PrgRomSize;
-        Mapper->CurrentLowRomBank = 0;
-
-        /* copy the prg and chr rom */
-        Memcpy(Mp002_GetPrgRomPtr(Mapper), PrgRom, PrgRomSize);
-        Memset(Mp002_GetChrPtr(Mapper), 0xFF, ChrRamSize);
-    }
-
+    u8 *MapperPrgRom = Mp002_GetPrgRomPtr(Mapper);
+    u8 *MapperChrRam = Mp002_GetChrPtr(Mapper);
+    Memcpy(MapperPrgRom, PrgRom, PrgRomSize);
+    Memset(MapperChrRam, 0, ChrRamSize);
     return Mapper;
+}
+
+void NESMapper002_Reset(NESMapperInterface *MapperInterface)
+{
+    NESMapper002 *Mapper = MapperInterface;
+    Mapper->CurrentLowRomBank = 0;
+    Mapper->PrgBankSize = 16 * 1024;
 }
 
 void NESMapper002_Destroy(NESMapperInterface *Mapper)
@@ -72,61 +60,78 @@ void NESMapper002_Destroy(NESMapperInterface *Mapper)
 }
 
 
-u8 NESMapper002_Read(NESMapperInterface *MapperInterface, u16 Addr)
+
+u8 NESMapper002_CPURead(NESMapperInterface *MapperInterface, u16 Addr)
 {
     NESMapper002 *Mapper = MapperInterface;
-    /* palette */
-    if (IN_RANGE(0x0000, Addr, 0x1FFF))
-    {
-        u16 PhysAddr = Addr % Mapper->ChrMemSize;
-        return Mp002_GetChrPtr(Mapper)[PhysAddr];
-    }
     /* prg rom (variable bank) */
-    else if (IN_RANGE(0x8000, Addr, 0xBFFF))
+    if (IN_RANGE(0x8000, Addr, 0xBFFF))
     {
-        u32 PhysAddr = Addr % BANK_SIZE;
-        u32 BaseAddr = Mapper->CurrentLowRomBank * BANK_SIZE;
-        return Mp002_GetPrgRomPtr(Mapper)[BaseAddr + PhysAddr];
+        u32 PhysAddr = Addr % Mapper->PrgBankSize;
+        u32 BaseAddr = Mapper->CurrentLowRomBank * Mapper->PrgBankSize;
+        u8 *PrgRom = Mp002_GetPrgRomPtr(Mapper);
+        return PrgRom[BaseAddr + PhysAddr];
     }
     /* prg rom (last bank always) */
     else if (IN_RANGE(0xC000, Addr, 0xFFFF))
     {
-        u32 PhysAddr = Addr % BANK_SIZE;
-        u32 BaseAddr = Mapper->PrgRomSize - BANK_SIZE;
-        return Mp002_GetPrgRomPtr(Mapper)[BaseAddr + PhysAddr];
+        u32 PhysAddr = Addr % Mapper->PrgBankSize;
+        u32 BaseAddr = Mapper->PrgRomSize - Mapper->PrgBankSize;
+        u8 *PrgRom = Mp002_GetPrgRomPtr(Mapper);
+        return PrgRom[BaseAddr + PhysAddr];
     }
-
     return 0;
 }
 
-void NESMapper002_Write(NESMapperInterface *MapperInterface, u16 Addr, u8 Byte)
+u8 NESMapper002_PPURead(NESMapperInterface *MapperInterface, u16 Addr)
 {
     NESMapper002 *Mapper = MapperInterface;
     /* palette */
     if (IN_RANGE(0x0000, Addr, 0x1FFF))
     {
-        u16 PhysAddr = Addr % Mapper->ChrMemSize;
-        Mp002_GetChrPtr(Mapper)[PhysAddr] = Byte;
+        u16 PhysAddr = Addr % Mapper->ChrRamSize;
+        u8 *ChrRam = Mp002_GetChrPtr(Mapper);
+        return ChrRam[PhysAddr];
     }
-    /* bank select */
-    else if (IN_RANGE(0x8000, Addr, 0xFFFF))
+    return 0;
+}
+
+
+
+void NESMapper002_CPUWrite(NESMapperInterface *MapperInterface, u16 Addr, u8 Byte)
+{
+    NESMapper002 *Mapper = MapperInterface;
+    /* palette */
+    if (IN_RANGE(0x0000, Addr, 0x1FFF))
     {
-        u32 RomMask = 0x7;
-        Mapper->CurrentLowRomBank = Byte & RomMask;
+        u16 PhysAddr = Addr % Mapper->ChrRamSize;
+        u8 *ChrRam = Mp002_GetChrPtr(Mapper);
+        ChrRam[PhysAddr] = Byte;
     }
 }
 
+void NESMapper002_PPUWrite(NESMapperInterface *MapperInterface, u16 Addr, u8 Byte)
+{
+    NESMapper002 *Mapper = MapperInterface;
+    /* bank select */
+    if (IN_RANGE(0x8000, Addr, 0xFFFF))
+    {
+        Mapper->CurrentLowRomBank = Byte & 0x7;
+    }
+}
+
+
+
 u8 NESMapper002_DebugCPURead(NESMapperInterface *Mapper, u16 Addr)
 {
-    return NESMapper002_Read(Mapper, Addr);
+    return NESMapper002_CPURead(Mapper, Addr);
 }
 
 u8 NESMapper002_DebugPPURead(NESMapperInterface *Mapper, u16 Addr)
 {
-    return NESMapper002_Read(Mapper, Addr);
+    return NESMapper002_PPURead(Mapper, Addr);
 }
 
 
-#undef BANK_SIZE
 #endif /* NES_MAPPER_002_C */
 

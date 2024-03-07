@@ -68,6 +68,12 @@ NESMapperInterface *NESMapper000_Init(const void *PrgRom, isize PrgRomSize, cons
     return Mapper;
 }
 
+void NESMapper000_Reset(NESMapperInterface *Mapper)
+{
+    /* do nothing */
+    (void)Mapper;
+}
+
 void NESMapper000_Destroy(NESMapperInterface *Mapper)
 {
     DEBUG_ASSERT(Mapper != NULL);
@@ -75,61 +81,76 @@ void NESMapper000_Destroy(NESMapperInterface *Mapper)
 }
 
 
-u8 NESMapper000_Read(NESMapperInterface *MapperInterface, u16 Addr)
+
+u8 NESMapper000_PPURead(NESMapperInterface *MapperInterface, u16 Addr)
 {
     NESMapper000 *Mapper = MapperInterface;
-    if (IN_RANGE(0x0000, Addr, 0x2000))
+    if (IN_RANGE(0x0000, Addr, 0x1FFF))
     {
-        u16 PhysAddr = Addr & (Mapper->ChrMemSize - 1);
-        return Mp000_GetChrPtr(Mapper)[PhysAddr];
+        u8 *ChrRom = Mp000_GetChrPtr(Mapper);
+        u16 PhysAddr = Addr % Mapper->ChrMemSize;
+        return ChrRom[PhysAddr];
     }
-    else if (IN_RANGE(0x6000, Addr, 0x7FFF))
-    {
-        if (Mapper->PrgRamSize)
-        {
-            Addr %= Mapper->PrgRamSize;
-            return Mp000_GetPrgRamPtr(Mapper)[Addr];
-        }
-    }
-    else if (IN_RANGE(0x8000, Addr, 0xFFFF))
-    {
-        u16 PhysAddr = Addr & (Mapper->PrgRomSize - 1);
-        return Mp000_GetPrgRomPtr(Mapper)[PhysAddr];
-    }
-
     return 0;
 }
 
-void NESMapper000_Write(NESMapperInterface *MapperInterface, u16 Addr, u8 Byte)
+u8 NESMapper000_CPURead(NESMapperInterface *MapperInterface, u16 Addr)
 {
     NESMapper000 *Mapper = MapperInterface;
-    if (IN_RANGE(0x0000, Addr, 0x2000))
-    {
-        u16 PhysAddr = Addr & (Mapper->ChrMemSize - 1);
-        Mp000_GetChrPtr(Mapper)[PhysAddr] = Byte;
-    }
-    else if (IN_RANGE(0x6000, Addr, 0x7FFF))
+    /* prg ram */
+    if (IN_RANGE(0x6000, Addr, 0x7FFF))
     {
         if (Mapper->PrgRamSize)
         {
-            Addr &= Mapper->PrgRamSize - 1;
-            Mp000_GetPrgRamPtr(Mapper)[Addr] = Byte;
+            u8 *PrgRam = Mp000_GetPrgRamPtr(Mapper);
+            u16 PhysAddr = Addr % Mapper->PrgRamSize;
+            return PrgRam[PhysAddr];
         }
     }
+    /* prg rom */
     else if (IN_RANGE(0x8000, Addr, 0xFFFF))
     {
-        /* cannot write to rom */
+        u8 *PrgRom = Mp000_GetPrgRomPtr(Mapper);
+        u16 PhysAddr = Addr % Mapper->PrgRomSize;
+        return PrgRom[PhysAddr];
+    }
+    return 0;
+}
+
+
+void NESMapper000_PPUWrite(NESMapperInterface *MapperInterface, u16 Addr, u8 Byte)
+{
+    NESMapper000 *Mapper = MapperInterface;
+    if (IN_RANGE(0x0000, Addr, 0x1FFF))
+    {
+        u8 *ChrRom = Mp000_GetChrPtr(Mapper);
+        u16 PhysAddr = Addr % Mapper->ChrMemSize;
+        ChrRom[PhysAddr] = Byte;
     }
 }
 
+void NESMapper000_CPUWrite(NESMapperInterface *MapperInterface, u16 Addr, u8 Byte)
+{
+    NESMapper000 *Mapper = MapperInterface;
+    /* can write to prg ram */
+    if (IN_RANGE(0x6000, Addr, 0x7FFF) 
+    && Mapper->PrgRamSize)
+    {
+        u8 *PrgRam = Mp000_GetPrgRamPtr(Mapper);
+        u16 PhysAddr = Addr % Mapper->PrgRamSize;
+        PrgRam[PhysAddr] = Byte;
+    }
+}
+
+
 u8 NESMapper000_DebugCPURead(NESMapperInterface *Mapper, u16 Addr)
 {
-    return NESMapper000_Read(Mapper, Addr);
+    return NESMapper000_CPURead(Mapper, Addr);
 }
 
 u8 NESMapper000_DebugPPURead(NESMapperInterface *Mapper, u16 Addr)
 {
-    return NESMapper000_Read(Mapper, Addr);
+    return NESMapper000_PPURead(Mapper, Addr);
 }
 
 

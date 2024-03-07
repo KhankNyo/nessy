@@ -104,7 +104,7 @@ static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
     /* Cartridge ROM */
     else if (sNes.Cartridge)
     {
-        NESCartridge_Write(sNes.Cartridge, Address, Byte);
+        NESCartridge_CPUWrite(sNes.Cartridge, Address, Byte);
     }
 }
 
@@ -143,7 +143,7 @@ static u8 NesInternal_ReadByte(void *UserData, u16 Address)
     /* Cartridge ROM */
     else if (sNes.Cartridge)
     {
-        return NESCartridge_Read(sNes.Cartridge, Address);
+        return NESCartridge_CPURead(sNes.Cartridge, Address);
     }
     return 0xEA;
 }
@@ -186,67 +186,96 @@ const char *Nes_ParseINESFile(const void *INESFile, isize FileSize)
     const u8 *FileDataStart = BytePtr + DataSectionOffset;
 
 
-    BytePtr += 4;
-    isize PrgRomSize = (isize)(*BytePtr++) * 16 * 1024;
-    isize ChrRomSize = (isize)(*BytePtr++) * 8  * 1024;
     /* verify file size */
+    isize PrgRomSize = ((isize)BytePtr[4]) * 16 * 1024;
+    isize ChrRomSize = ((isize)BytePtr[5]) * 8  * 1024;
     if (FileSize < ChrRomSize + PrgRomSize + DataSectionOffset)
         goto ErrorFileTooSmall;
     
 
     /* read flags */
-    u8 Flag6 = *BytePtr++;
-    u8 Flag7 = *BytePtr++;
+    u8 Flag6 = BytePtr[6];
+    u8 Flag7 = BytePtr[7];
     u8 MapperID = (Flag6 >> 4) | (Flag7 & 0xF0);
-    if (Flag6 & (1 << 3)) /* alternate nametable layout */
-    {
-    }
-    NESNameTableMirroring NameTableMirroring = NAMETABLE_HORIZONTAL;
+    NESNametableMirroring NametableMirroring = NAMETABLE_HORIZONTAL;
     if (Flag6 & (1 << 0)) /* name table vertical */
     {
-        NameTableMirroring = NAMETABLE_VERTICAL;
+        NametableMirroring = NAMETABLE_VERTICAL;
     }
+    Bool8 AlternativeNametableLayout = (Flag6 & (1 << 3)) != 0;
 
-    if (Flag6 & (1 << 1)) /* battery packed ram available (aka SRAM, or WRAM) */
-    {
-    }
+
     if (Flag6 & (1 << 2)) /* 512 byte trainer (don't care) */
     {
         FileDataStart += 512;
     }
-
-
-
     const u8 *FilePrgRom = FileDataStart;
     const u8 *FileChrRom = FileDataStart + PrgRomSize;
+
+
+    /* determine file version and more info about mappers, ram and rom */
+    isize PrgRamSize = 0;
+    isize ChrRamSize = 0;
+    Bool8 HasBusConflict = false;
+    NESCartridge Cartridge = { 0 };
     uint INESFileVersion = (Flag7 >> 2) & 0x3;
-    switch (INESFileVersion)
+    if (0 == INESFileVersion 
+    || 1 == INESFileVersion)
     {
-    /* most of the info we need are the same accross different version anyway */
-    case 0: /* iNes 0.7 */
-    case 1: /* iNes */
-    case 2: /* iNes 2.0 */
-    {
-        NESCartridge Cartridge = NESCartridge_Init(
-            FilePrgRom, PrgRomSize, 
-            FileChrRom, ChrRomSize, 
-            MapperID, NameTableMirroring
-        );
-        if (Cartridge.MapperInterface == NULL)
+        if (ChrRomSize == 0)
         {
-            return "Unsupported mapper";
+            ChrRamSize = 8*1024;
+            FileChrRom = NULL;
         }
-        else
-        {
-            Nes_ConnectCartridge(Cartridge);
-        }
-    } break;
-    default:
-    {
-        return "Unknown iNes file version";
-    } break;
     }
-    return NULL;
+    else if (2 == INESFileVersion)
+    {
+        if (ChrRomSize == 0)
+            FileChrRom = NULL;
+
+        /* https://www.nesdev.org/wiki/NES_2.0#Nametable_layout */
+        u8 PrgRamFlag = BytePtr[10];
+        u8 ChrRamFlag = BytePtr[11];
+        if (PrgRamFlag & 0x0F) /* has PRG RAM? */
+        {
+            PrgRamSize = 64 << (PrgRamFlag & 0x0F);
+        }
+        if (PrgRamFlag & 0xF0) /* has non-volatile PRG RAM? */
+        {
+            /* don't care cuz very few games and mappers have it */
+        }
+        if (ChrRamFlag & 0x0F) /* has CHR RAM? */
+        {
+            ChrRamSize = 64 << (ChrRamFlag & 0x0F);
+        }
+        if (ChrRamFlag & 0xF0) /* has non-volatile CHR RAM? */
+        {
+            /* don't care cuz very few games and mappers have it */
+        }
+    }
+    else 
+    {
+        return "Unknown iNes file version (3)";
+    }
+
+    Cartridge = NESCartridge_Init(
+        FilePrgRom, PrgRomSize, 
+        FileChrRom, ChrRomSize, 
+        PrgRamSize, ChrRamSize, 
+        MapperID, 
+        NametableMirroring, 
+        AlternativeNametableLayout,
+        HasBusConflict
+    );
+    if (Cartridge.MapperInterface == NULL)
+    {
+        return "Unsupported mapper";
+    }
+    else
+    {
+        Nes_ConnectCartridge(Cartridge);
+        return NULL; /* no error */
+    }
 
 ErrorFileTooSmall:
     return "File too small (must be at least 16kb)";

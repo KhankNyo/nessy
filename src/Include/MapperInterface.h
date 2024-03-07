@@ -9,11 +9,11 @@ typedef enum NESMapperID
     NES_MAPPER_003 = 3,
 } NESMapperID; 
 typedef void NESMapperInterface;
-typedef NESMapperInterface (*NESMapper_InitFn)(const void *PrgRom, isize PrgRomSize, const void *ChrRom, isize ChrRomSize);
+typedef void (*NESMapper_ResetFn)(NESMapperInterface *);
 typedef u8 (*NESMapper_ReadFn)(NESMapperInterface *, u16 Addr);
+typedef void (*NESMapper_WriteFn)(NESMapperInterface *, u16 Addr, u8 Byte);
 typedef u8 (*NESMapper_DebugCPUReadFn)(NESMapperInterface *, u16 Addr);
 typedef u8 (*NESMapper_DebugPPUReadFn)(NESMapperInterface *, u16 Addr);
-typedef void (*NESMapper_DebugWriteFn)(NESMapperInterface *, u16 Addr, u8 Byte);
 
 #endif /* MAPPER_INTERFACE_H */
 
