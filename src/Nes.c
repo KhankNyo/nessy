@@ -45,18 +45,17 @@ typedef struct Emulator
     NESDisassemblerState DisassemblerState;
     NESCartridge Cartridge;
 
-    /* screen */
-    u32 ScreenBuffer[2][NES_SCREEN_BUFFER_SIZE];
-    u32 (*BackBuffer)[NES_SCREEN_BUFFER_SIZE];
-    u32 (*FrontBuffer)[NES_SCREEN_BUFFER_SIZE];
-
     /* emulator */
     uint CurrentPalette;
     NESEmulationMode EmulationMode;
     Bool8 EmulationHalted;
     Bool8 EmulationDone;
-
     double ResidueTime;
+
+    /* screen */
+    u32 ScreenBuffer[2][NES_SCREEN_BUFFER_SIZE];
+    u32 (*BackBuffer)[NES_SCREEN_BUFFER_SIZE];
+    u32 (*FrontBuffer)[NES_SCREEN_BUFFER_SIZE];
 } Emulator;
 
 
@@ -176,7 +175,7 @@ const char *Nes_ParseINESFile(BufferData StaticBuffer, const void *INESFile, isi
 
     isize DataSectionOffset = 16;
     {
-        isize MinimalINesFileSize = 16 * 1024 + DataSectionOffset;
+        isize MinimalINesFileSize = 16 * KB + DataSectionOffset;
         if (FileSize < MinimalINesFileSize)
             goto ErrorFileTooSmall;
     }
