@@ -17,6 +17,15 @@
 #define NES_PATTERN_TABLE_HEIGHT_PIX 16*8
 
 
+typedef struct Platform_AudioConfig 
+{
+    Bool8 EnableAudio;
+    u32 SampleRate;
+    u32 ChannelCount;
+    u32 QueueSize;
+    u32 BufferSizeBytes;
+} Platform_AudioConfig;
+
 typedef struct Platform_FrameBuffer 
 {
     const void *Data;
@@ -48,6 +57,8 @@ typedef u16 Nes_ControllerStatus;
 /* if the platform was unable to provide a suitable buffer, all Nes_* functions will never be called */
 /* the memory given to Nes_OnEntry is guaranteed to be initialized with zero */
 isize Nes_PlatformQueryStaticBufferSize(void);
+
+/* these functions can happen at any time (if Nes_PlatformQueryStaticBufferSize succeeds) */
 Platform_FrameBuffer Nes_PlatformQueryFrameBuffer(BufferData StaticBuffer);
 Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(BufferData StaticBuffer);
 
@@ -61,7 +72,7 @@ Nes_ControllerStatus Platform_GetControllerState(void);
 /* NOTE: Nes_OnEntry and the rest of the functions below it are 
  * only called when the platform was able to create a buffer that has 
  * the size requested by Nes_PlatformQueryStaticBufferSize */
-void Nes_OnEntry(BufferData StaticBuffer);
+Platform_AudioConfig Nes_OnEntry(BufferData StaticBuffer);
 void Nes_OnLoop(BufferData StaticBuffer, double ElapsedTime);
 void Nes_AtExit(BufferData StaticBuffer);
 /* event handlers */

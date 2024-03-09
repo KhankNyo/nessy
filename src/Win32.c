@@ -1,14 +1,19 @@
 
-#include <windows.h>
-#include <commctrl.h>
-#include <commdlg.h>
-#include <wingdi.h>
+
 
 #include "Common.h"
 #include "Utils.h"
 
-
 #include "Nes.c"
+
+#define COBJMACROS
+#include <windows.h>
+#include <commctrl.h>
+#include <commdlg.h>
+#include <wingdi.h>
+#include <mmdeviceapi.h>
+#include <audioclient.h>
+
 
 
 #define COLOR_WHITE 0x00FFFFFF
@@ -48,6 +53,44 @@ static double sWin32_TimerFrequency;
 static Nes_DisplayableStatus sWin32_DisplayableStatus;
 static Platform_FrameBuffer sWin32_FrameBuffer;
 static BufferData sWin32_StaticBuffer;
+
+static WAVEFORMATEX sWin32_AudioFormat = { 0 };
+
+
+#define GUID_SECT
+
+#define __DEFINE_GUID(n,l,w1,w2,b1,b2,b3,b4,b5,b6,b7,b8) static const GUID n GUID_SECT = {l,w1,w2,{b1,b2,b3,b4,b5,b6,b7,b8}}
+#define __DEFINE_IID(n,l,w1,w2,b1,b2,b3,b4,b5,b6,b7,b8) static const IID n GUID_SECT = {l,w1,w2,{b1,b2,b3,b4,b5,b6,b7,b8}}
+#define __DEFINE_CLSID(n,l,w1,w2,b1,b2,b3,b4,b5,b6,b7,b8) static const CLSID n GUID_SECT = {l,w1,w2,{b1,b2,b3,b4,b5,b6,b7,b8}}
+#define PA_DEFINE_CLSID(className, l, w1, w2, b1, b2, b3, b4, b5, b6, b7, b8) \
+        __DEFINE_CLSID(s_CLS_##className, 0x##l, 0x##w1, 0x##w2, 0x##b1, 0x##b2, 0x##b3, 0x##b4, 0x##b5, 0x##b6, 0x##b7, 0x##b8)
+#define PA_DEFINE_IID(interfaceName, l, w1, w2, b1, b2, b3, b4, b5, b6, b7, b8) \
+        __DEFINE_IID(s_IID_##interfaceName, 0x##l, 0x##w1, 0x##w2, 0x##b1, 0x##b2, 0x##b3, 0x##b4, 0x##b5, 0x##b6, 0x##b7, 0x##b8)
+
+// "1CB9AD4C-DBFA-4c32-B178-C2F568A703B2"
+PA_DEFINE_IID(IAudioClient, 1cb9ad4c, dbfa, 4c32, b1, 78, c2, f5, 68, a7, 03, b2);
+// "726778CD-F60A-4EDA-82DE-E47610CD78AA"
+PA_DEFINE_IID(IAudioClient2, 726778cd, f60a, 4eda, 82, de, e4, 76, 10, cd, 78, aa);
+// "7ED4EE07-8E67-4CD4-8C1A-2B7A5987AD42"
+PA_DEFINE_IID(IAudioClient3, 7ed4ee07, 8e67, 4cd4, 8c, 1a, 2b, 7a, 59, 87, ad, 42);
+// "1BE09788-6894-4089-8586-9A2A6C265AC5"
+PA_DEFINE_IID(IMMEndpoint, 1be09788, 6894, 4089, 85, 86, 9a, 2a, 6c, 26, 5a, c5);
+// "A95664D2-9614-4F35-A746-DE8DB63617E6"
+PA_DEFINE_IID(IMMDeviceEnumerator, a95664d2, 9614, 4f35, a7, 46, de, 8d, b6, 36, 17, e6);
+// "BCDE0395-E52F-467C-8E3D-C4579291692E"
+PA_DEFINE_CLSID(IMMDeviceEnumerator, bcde0395, e52f, 467c, 8e, 3d, c4, 57, 92, 91, 69, 2e);
+// "F294ACFC-3146-4483-A7BF-ADDCA7C260E2"
+PA_DEFINE_IID(IAudioRenderClient, f294acfc, 3146, 4483, a7, bf, ad, dc, a7, c2, 60, e2);
+// "C8ADBD64-E71E-48a0-A4DE-185C395CD317"
+PA_DEFINE_IID(IAudioCaptureClient, c8adbd64, e71e, 48a0, a4, de, 18, 5c, 39, 5c, d3, 17);
+// *2A07407E-6497-4A18-9787-32F79BD0D98F*  Or this??
+PA_DEFINE_IID(IDeviceTopology, 2A07407E, 6497, 4A18, 97, 87, 32, f7, 9b, d0, d9, 8f);
+// *AE2DE0E4-5BCA-4F2D-AA46-5D13F8FDB3A9*
+PA_DEFINE_IID(IPart, AE2DE0E4, 5BCA, 4F2D, aa, 46, 5d, 13, f8, fd, b3, a9);
+// *4509F757-2D46-4637-8E62-CE7DB944F57B*
+PA_DEFINE_IID(IKsJackDescription, 4509F757, 2D46, 4637, 8e, 62, ce, 7d, b9, 44, f5, 7b);
+
+#undef GUID_SECT
 
 
 
@@ -607,6 +650,111 @@ static void Win32_UpdateWindowTimer(HWND Window, UINT DontCare, UINT_PTR DontCar
     InvalidateRect(sWin32_Gui.GameWindow, NULL, FALSE);
 }
 
+
+typedef struct AudioState
+{
+    IMMDevice* Device;
+    IAudioClient* Client;
+    IAudioRenderClient* Renderer;
+    UINT32 BufferSizeFrame;
+    HANDLE BufferRefillEvent;
+    WAVEFORMATEX Format;
+} AudioState;
+
+static const char *Win32_InitializeAudio(int SamplesPerSec, int Channels, int BitsPerSample, int BufferSizeBytes)
+{
+#define SEC_TO_100NS(sec) (sec)*10000000
+
+    int FrameSize = Channels * BitsPerSample / 8;
+    AudioState Audio = { 
+        .Format = {
+            .wFormatTag = WAVE_FORMAT_PCM,
+            .wBitsPerSample = BitsPerSample,
+            .nChannels = Channels,
+            .nSamplesPerSec = SamplesPerSec,
+            .nAvgBytesPerSec = SamplesPerSec * FrameSize,
+            .nBlockAlign = FrameSize,
+        },
+    };
+    HRESULT hr;
+
+    /* get audio device */
+    {
+        IMMDeviceEnumerator* DeviceEnumerator;
+        hr = CoCreateInstance(&s_CLS_IMMDeviceEnumerator, 
+            NULL, 
+            CLSCTX_INPROC_SERVER, 
+            &s_IID_IMMDeviceEnumerator, 
+            (void **)&DeviceEnumerator
+        ); 
+        WIN32_NO_ERR(hr, "CoCreateInstance");
+
+        hr = IMMDeviceEnumerator_GetDefaultAudioEndpoint(DeviceEnumerator, eRender, eMultimedia, &Audio.Device);
+        WIN32_NO_ERR(hr, "GetDefaultAudioEndpoint");
+
+        IMMDeviceEnumerator_Release(DeviceEnumerator);
+    }
+
+    /* audio client bs */
+    hr = IMMDevice_Activate(
+            Audio.Device, 
+            &s_IID_IAudioClient, 
+            CLSCTX_INPROC_SERVER, 
+            NULL, 
+            (void **)&Audio.Client
+            );
+    WIN32_NO_ERR(hr, "Device->Activate");
+
+
+    /* setup sound sample */
+    REFERENCE_TIME BufferDuration100ns = SEC_TO_100NS(BufferSizeBytes) / SamplesPerSec;
+    hr = IAudioClient_Initialize(
+            Audio.Client, 
+            AUDCLNT_SHAREMODE_SHARED,   
+            AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 
+            BufferDuration100ns, 
+            0, 
+            &Audio.Format, 
+            NULL
+            );
+    WIN32_NO_ERR(hr, "AudioClient->Initialize");
+
+
+    /* create an event handler to fill the buffer when needed */
+    Audio.BufferRefillEvent = CreateEventExA(NULL, NULL, 0, SYNCHRONIZE | EVENT_MODIFY_STATE);
+    /* retarded function */
+    DEBUG_ASSERT(Audio.BufferRefillEvent && Audio.BufferRefillEvent != INVALID_HANDLE_VALUE, 
+            "CreateEventExA"
+    );
+    /* set the event */
+    hr = IAudioClient_SetEventHandle(Audio.Client, Audio.BufferRefillEvent);
+    WIN32_NO_ERR(hr, "SetEventHandle");
+
+
+    /* get the audio render service */
+    hr = IAudioClient_GetService(Audio.Client, &s_IID_IAudioRenderClient, &Audio.Renderer);
+    WIN32_NO_ERR(hr, "GetService");
+
+
+    /* get the buffer size (in frame count: channel * sampleSizeBytes */
+    hr = IAudioClient_GetBufferSize(Audio.Client, &Audio.BufferSizeFrame);
+    WIN32_NO_ERR(hr, "GetBufferSize (init)");
+    {
+        BYTE* Tmp;
+        hr = IAudioRenderClient_GetBuffer(Audio.Renderer, Audio.BufferSizeFrame, &Tmp);
+        WIN32_NO_ERR(hr, "GetBuffer (init)");
+
+        /* clear the buffer to 0 */
+        hr = IAudioRenderClient_ReleaseBuffer(Audio.Renderer, Audio.BufferSizeFrame, AUDCLNT_BUFFERFLAGS_SILENT);
+        WIN32_NO_ERR(hr, "ReleaseBuffer (init)");
+    }
+    return Audio;
+}
+
+
+
+
+
 int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, int CmdShow)
 {
     (void)PrevInstance, (void)CmdLine, (void)CmdShow;
@@ -667,7 +815,21 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
 
 
     /* call the emulator's entry point */
-    Nes_OnEntry(sWin32_StaticBuffer);
+    Platform_AudioConfig AudioConfig = Nes_OnEntry(sWin32_StaticBuffer);
+    if (AudioConfig.EnableAudio)
+    {
+        const char *ErrorMessage = Win32_InitializeAudio(
+            AudioConfig.SampleRate, 
+            AudioConfig.ChannelCount, 
+            16, 
+            AudioConfig.BufferSizeBytes * AudioConfig.QueueSize
+        );
+        if (ErrorMessage)
+        {
+            Nes_OnAudioInitializationFailed(sWin32_StaticBuffer);
+            Win32_ErrorBox(ErrorMessage);
+        }
+    }
 
 
     /* event loop */
@@ -687,6 +849,10 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
     (void)sWin32_Gui.MainWindow;
     /* don't need to free the memory, windows does it faster than us */
     (void)sWin32_StaticBuffer;
+
+    /* but we do need to cleanup audio devices */
+    if (AudioConfig.EnableAudio)
+        Win32_DestroyAudio();
 
 
     /* gracefully exits */

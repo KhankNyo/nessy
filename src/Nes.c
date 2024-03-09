@@ -378,7 +378,7 @@ isize Nes_RequestStaticBufferSize(void)
     return sizeof(Emulator);
 }
 
-void Nes_OnEntry(BufferData StaticBuffer)
+Platform_AudioConfig Nes_OnEntry(BufferData StaticBuffer)
 {
     DEBUG_ASSERT(StaticBuffer.ViewPtr);
     DEBUG_ASSERT(StaticBuffer.SizeBytes == sizeof(Emulator));
@@ -410,6 +410,15 @@ void Nes_OnEntry(BufferData StaticBuffer)
         .Count = 16,
         .BytesPerLine = 3,
     };
+
+    u32 AudioChannelCount = 1;
+    Platform_AudioConfig AudioConfig = {
+        .SampleRate = 48000,
+        .ChannelCount = AudioChannelCount, 
+        .QueueSize = 16,
+        .BufferSizeBytes = 512 * AudioChannelCount * sizeof(int16_t),
+    };
+    return AudioConfig;
 }
 
 
