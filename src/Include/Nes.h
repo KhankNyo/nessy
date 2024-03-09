@@ -19,11 +19,11 @@
 
 typedef struct Platform_AudioConfig 
 {
-    Bool8 EnableAudio;
     u32 SampleRate;
     u32 ChannelCount;
-    u32 QueueSize;
     u32 BufferSizeBytes;
+    u32 Volume;
+    Bool8 EnableAudio;
 } Platform_AudioConfig;
 
 typedef struct Platform_FrameBuffer 
@@ -60,6 +60,7 @@ isize Nes_PlatformQueryStaticBufferSize(void);
 
 /* these functions can happen at any time (if Nes_PlatformQueryStaticBufferSize succeeds) */
 Platform_FrameBuffer Nes_PlatformQueryFrameBuffer(BufferData StaticBuffer);
+void Nes_OnAudioFailed(BufferData StaticBuffer);
 Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(BufferData StaticBuffer);
 
 
@@ -73,6 +74,7 @@ Nes_ControllerStatus Platform_GetControllerState(void);
  * only called when the platform was able to create a buffer that has 
  * the size requested by Nes_PlatformQueryStaticBufferSize */
 Platform_AudioConfig Nes_OnEntry(BufferData StaticBuffer);
+void Nes_OnAudioInitializationFailed(BufferData StaticBuffer);
 void Nes_OnLoop(BufferData StaticBuffer, double ElapsedTime);
 void Nes_AtExit(BufferData StaticBuffer);
 /* event handlers */

@@ -31,6 +31,21 @@ typedef struct Win32_Rect
     int X, Y, W, H;
 } Win32_Rect;
 
+typedef struct Win32_Audio
+{
+    Platform_AudioConfig Config;
+
+    IMMDevice* Device;
+    IAudioClient* Client;
+    IAudioRenderClient* Renderer;
+    WAVEFORMATEX Format;
+    UINT32 BufferSizeFrame;
+
+    Bool8 ThreadShouldStop;
+    Bool8 ThreadTerminated;
+    HANDLE BufferRefillEvent;
+    HANDLE ThreadHandle;
+} Win32_Audio;
 
 
 
@@ -54,7 +69,7 @@ static Nes_DisplayableStatus sWin32_DisplayableStatus;
 static Platform_FrameBuffer sWin32_FrameBuffer;
 static BufferData sWin32_StaticBuffer;
 
-static WAVEFORMATEX sWin32_AudioFormat = { 0 };
+static volatile Win32_Audio sWin32_Audio = { 0 };
 
 
 #define GUID_SECT
@@ -651,29 +666,109 @@ static void Win32_UpdateWindowTimer(HWND Window, UINT DontCare, UINT_PTR DontCar
 }
 
 
-typedef struct AudioState
-{
-    IMMDevice* Device;
-    IAudioClient* Client;
-    IAudioRenderClient* Renderer;
-    UINT32 BufferSizeFrame;
-    HANDLE BufferRefillEvent;
-    WAVEFORMATEX Format;
-} AudioState;
 
-static const char *Win32_InitializeAudio(int SamplesPerSec, int Channels, int BitsPerSample, int BufferSizeBytes)
+
+
+
+static double Win32_PulseWave(double t)
+{
+    double y = 0;
+    for (int i = 1; i <= 20; i++)
+    {
+        y += Sin64(t*i) / (double)i;
+    }
+    return y;
+}
+
+
+static DWORD Win32_AudioThread(void *UserData)
+{
+    (void)UserData;
+    double t = 0;
+    double Hz = 440;
+    double dt = Hz * 2 * 3.14159 / sWin32_Audio.Config.SampleRate;
+    sWin32_Audio.ThreadTerminated = false;
+    IAudioClient_Start(sWin32_Audio.Client);
+
+    while (!sWin32_Audio.ThreadShouldStop)
+    {
+        DWORD WaitResult = WaitForSingleObject(sWin32_Audio.BufferRefillEvent, INFINITE);
+        if (WAIT_OBJECT_0 != WaitResult)
+            break;
+
+        UINT32 UnreadFrames;
+        HRESULT hr = IAudioClient_GetCurrentPadding(sWin32_Audio.Client, &UnreadFrames);
+        if (FAILED(hr))
+        {
+        }
+
+        UINT32 FramesToWrite = sWin32_Audio.BufferSizeFrame - UnreadFrames;
+        BYTE *Buffer;
+        hr = IAudioRenderClient_GetBuffer(sWin32_Audio.Renderer, FramesToWrite, &Buffer);
+        if (FAILED(hr))
+        {
+        }
+
+        int16_t *DataPtr = (int16_t *)Buffer;
+        for (UINT32 f = 0; f < FramesToWrite; f++)
+        {
+            double SoundSample = sWin32_Audio.Config.Volume * Win32_PulseWave(t);
+            t += dt;
+
+            int16_t SoundData = (int16_t)SoundSample;
+            if (SoundSample >= INT16_MAX)
+                SoundData = INT16_MAX;
+            else if (SoundSample <= (double)INT16_MIN)
+                SoundData = INT16_MIN;
+
+            for (UINT32 c = 0; c < sWin32_Audio.Config.ChannelCount; c++)
+            {
+                *DataPtr++ = SoundData;
+            }
+        }
+
+        hr = IAudioRenderClient_ReleaseBuffer(sWin32_Audio.Renderer, FramesToWrite, 0);
+        if (FAILED(hr))
+        {
+        }
+    }
+    IAudioClient_Stop(sWin32_Audio.Client);
+    sWin32_Audio.ThreadTerminated = true;
+    return 0;
+}
+
+
+static void Win32_DestroyAudio(void)
+{
+    if (!sWin32_Audio.ThreadTerminated)
+    {
+        sWin32_Audio.ThreadShouldStop = true;
+        WaitForSingleObject(sWin32_Audio.ThreadHandle, INFINITE);
+        CloseHandle(sWin32_Audio.ThreadHandle);
+    }
+
+    IAudioRenderClient_Release(sWin32_Audio.Renderer);
+    IAudioClient_Release(sWin32_Audio.Client);
+    IMMDevice_Release(sWin32_Audio.Device);
+    CloseHandle(sWin32_Audio.BufferRefillEvent);
+}
+
+
+static Bool8 Win32_InitializeAudio(Platform_AudioConfig Config, int BitsPerSample)
 {
 #define SEC_TO_100NS(sec) (sec)*10000000
 
-    int FrameSize = Channels * BitsPerSample / 8;
-    AudioState Audio = { 
+    int FrameSize = Config.ChannelCount * BitsPerSample / 8;
+    sWin32_Audio = (Win32_Audio) {
+        .Config = Config,
         .Format = {
+            .cbSize = 0,
+            .nChannels = Config.ChannelCount, 
             .wFormatTag = WAVE_FORMAT_PCM,
-            .wBitsPerSample = BitsPerSample,
-            .nChannels = Channels,
-            .nSamplesPerSec = SamplesPerSec,
-            .nAvgBytesPerSec = SamplesPerSec * FrameSize,
             .nBlockAlign = FrameSize,
+            .wBitsPerSample = BitsPerSample, 
+            .nSamplesPerSec = Config.SampleRate, 
+            .nAvgBytesPerSec = Config.SampleRate * BitsPerSample / 8,
         },
     };
     HRESULT hr;
@@ -687,69 +782,103 @@ static const char *Win32_InitializeAudio(int SamplesPerSec, int Channels, int Bi
             &s_IID_IMMDeviceEnumerator, 
             (void **)&DeviceEnumerator
         ); 
-        WIN32_NO_ERR(hr, "CoCreateInstance");
+        if (FAILED(hr))
+            return false;
 
-        hr = IMMDeviceEnumerator_GetDefaultAudioEndpoint(DeviceEnumerator, eRender, eMultimedia, &Audio.Device);
-        WIN32_NO_ERR(hr, "GetDefaultAudioEndpoint");
+        hr = IMMDeviceEnumerator_GetDefaultAudioEndpoint(
+            DeviceEnumerator, 
+            eRender, 
+            eMultimedia, 
+            &sWin32_Audio.Device
+        );
+        if (FAILED(hr)) 
+            return false;
 
         IMMDeviceEnumerator_Release(DeviceEnumerator);
     }
 
     /* audio client bs */
     hr = IMMDevice_Activate(
-            Audio.Device, 
-            &s_IID_IAudioClient, 
-            CLSCTX_INPROC_SERVER, 
-            NULL, 
-            (void **)&Audio.Client
-            );
-    WIN32_NO_ERR(hr, "Device->Activate");
+        sWin32_Audio.Device,
+        &s_IID_IAudioClient, 
+        CLSCTX_INPROC_SERVER, 
+        NULL, 
+        (void **)&sWin32_Audio.Client
+    );
+    if (FAILED(hr)) 
+        return false;
 
 
     /* setup sound sample */
-    REFERENCE_TIME BufferDuration100ns = SEC_TO_100NS(BufferSizeBytes) / SamplesPerSec;
+    REFERENCE_TIME BufferDuration100ns = SEC_TO_100NS(Config.BufferSizeBytes) / Config.SampleRate;
     hr = IAudioClient_Initialize(
-            Audio.Client, 
-            AUDCLNT_SHAREMODE_SHARED,   
-            AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 
-            BufferDuration100ns, 
-            0, 
-            &Audio.Format, 
-            NULL
-            );
-    WIN32_NO_ERR(hr, "AudioClient->Initialize");
-
+        sWin32_Audio.Client, 
+        AUDCLNT_SHAREMODE_SHARED,   
+        AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 
+        BufferDuration100ns, 
+        0, 
+        &sWin32_Audio.Format, 
+        NULL
+    );
+    if (FAILED(hr)) 
+        return false;
 
     /* create an event handler to fill the buffer when needed */
-    Audio.BufferRefillEvent = CreateEventExA(NULL, NULL, 0, SYNCHRONIZE | EVENT_MODIFY_STATE);
-    /* retarded function */
-    DEBUG_ASSERT(Audio.BufferRefillEvent && Audio.BufferRefillEvent != INVALID_HANDLE_VALUE, 
-            "CreateEventExA"
-    );
+    sWin32_Audio.BufferRefillEvent = CreateEventExA(NULL, NULL, 0, SYNCHRONIZE | EVENT_MODIFY_STATE);
+    if (sWin32_Audio.BufferRefillEvent == NULL 
+    || sWin32_Audio.BufferRefillEvent == INVALID_HANDLE_VALUE) 
+        return false;
+
     /* set the event */
-    hr = IAudioClient_SetEventHandle(Audio.Client, Audio.BufferRefillEvent);
-    WIN32_NO_ERR(hr, "SetEventHandle");
+    hr = IAudioClient_SetEventHandle(sWin32_Audio.Client, sWin32_Audio.BufferRefillEvent);
+    if (FAILED(hr)) 
+        return false;
 
 
     /* get the audio render service */
-    hr = IAudioClient_GetService(Audio.Client, &s_IID_IAudioRenderClient, &Audio.Renderer);
-    WIN32_NO_ERR(hr, "GetService");
+    hr = IAudioClient_GetService(sWin32_Audio.Client, &s_IID_IAudioRenderClient, (void**)&sWin32_Audio.Renderer);
+    if (FAILED(hr)) 
+        return false;
 
 
-    /* get the buffer size (in frame count: channel * sampleSizeBytes */
-    hr = IAudioClient_GetBufferSize(Audio.Client, &Audio.BufferSizeFrame);
-    WIN32_NO_ERR(hr, "GetBufferSize (init)");
+    /* get the buffer size (in frame count: channel * sampleSizeBytes) */
+    hr = IAudioClient_GetBufferSize(sWin32_Audio.Client, &sWin32_Audio.BufferSizeFrame);
+    if (FAILED(hr)) 
+        return false;
+
     {
         BYTE* Tmp;
-        hr = IAudioRenderClient_GetBuffer(Audio.Renderer, Audio.BufferSizeFrame, &Tmp);
-        WIN32_NO_ERR(hr, "GetBuffer (init)");
+        hr = IAudioRenderClient_GetBuffer(sWin32_Audio.Renderer, sWin32_Audio.BufferSizeFrame, &Tmp);
+        if (FAILED(hr)) 
+            return false;
 
         /* clear the buffer to 0 */
-        hr = IAudioRenderClient_ReleaseBuffer(Audio.Renderer, Audio.BufferSizeFrame, AUDCLNT_BUFFERFLAGS_SILENT);
-        WIN32_NO_ERR(hr, "ReleaseBuffer (init)");
+        hr = IAudioRenderClient_ReleaseBuffer(sWin32_Audio.Renderer, sWin32_Audio.BufferSizeFrame, AUDCLNT_BUFFERFLAGS_SILENT);
+        if (FAILED(hr)) 
+            return false;
     }
-    return Audio;
+
+    /* create audio thread */
+    sWin32_Audio.ThreadShouldStop = false;
+    sWin32_Audio.ThreadTerminated = true;
+    sWin32_Audio.ThreadHandle = CreateThread(
+        NULL, 
+        0, 
+        Win32_AudioThread, 
+        NULL, 
+        0, 
+        NULL
+    );
+    if (NULL == sWin32_Audio.ThreadHandle)
+    {
+        return false;
+    }
+
+    return true;
+
+#undef SEC_TO_100NS
 }
+
 
 
 
@@ -818,16 +947,11 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
     Platform_AudioConfig AudioConfig = Nes_OnEntry(sWin32_StaticBuffer);
     if (AudioConfig.EnableAudio)
     {
-        const char *ErrorMessage = Win32_InitializeAudio(
-            AudioConfig.SampleRate, 
-            AudioConfig.ChannelCount, 
-            16, 
-            AudioConfig.BufferSizeBytes * AudioConfig.QueueSize
-        );
-        if (ErrorMessage)
+        Bool8 AudioInitOk = Win32_InitializeAudio(AudioConfig, 16);
+        if (!AudioInitOk)
         {
-            Nes_OnAudioInitializationFailed(sWin32_StaticBuffer);
-            Win32_ErrorBox(ErrorMessage);
+            Nes_OnAudioFailed(sWin32_StaticBuffer);
+            Win32_ErrorBox("Unable to initialize audio.");
         }
     }
 
@@ -852,7 +976,9 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
 
     /* but we do need to cleanup audio devices */
     if (AudioConfig.EnableAudio)
+    {
         Win32_DestroyAudio();
+    }
 
 
     /* gracefully exits */

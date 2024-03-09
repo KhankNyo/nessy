@@ -413,12 +413,17 @@ Platform_AudioConfig Nes_OnEntry(BufferData StaticBuffer)
 
     u32 AudioChannelCount = 1;
     Platform_AudioConfig AudioConfig = {
+        .EnableAudio = true,
         .SampleRate = 48000,
         .ChannelCount = AudioChannelCount, 
-        .QueueSize = 16,
-        .BufferSizeBytes = 512 * AudioChannelCount * sizeof(int16_t),
+        .BufferSizeBytes = 1024 * AudioChannelCount * sizeof(int16_t),
+        .Volume = 4000,
     };
     return AudioConfig;
+}
+
+void Nes_OnAudioFailed(BufferData StaticBuffer)
+{
 }
 
 
