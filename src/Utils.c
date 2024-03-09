@@ -159,3 +159,68 @@ Continue:
 #undef WRITE_BUF
 }
 
+
+
+#define PI64  3.141592653589793
+#define TAU64 6.283185307179586
+#define INV_2_FACTORIAL (.5f)
+#define MAGIC 0.943221151718100
+
+double Sin64(double x) 
+{
+    /* 
+     * using Taylor series: 
+     * sin(x) ~ 1 - t^2/2! + a*t^4/4! 
+     * where t is x - pi/2
+     * where a is .943221151718100
+     * (gives the lowest delta compared to cos(x))
+     * (and probably has more digits but desmos ran out of precision, 
+     * but that's fine because under the hood, 
+     * desmos ran on js, and js uses double to calculate it)
+     */                                                                             
+                                                                                    
+    /* force x to be in range of 0..2pi */                                          
+    double t = x * (double)(1.0f / TAU64); /* this better get eval at comptime */
+    t -= (i64)t;
+    Bool8 ShouldBeNegated = t >= .5;
+    if (ShouldBeNegated)
+        t -= .5;
+    t = t*TAU64 - PI64/2;
+                                                                                    
+    /* calculate result  */
+    double t2 = t*t;
+    double y = 1
+        - t2 * (double)INV_2_FACTORIAL
+        + t2*t2 * (double)(MAGIC / 24.0f); 
+    if (ShouldBeNegated)
+        return -y;
+    return y;
+}
+
+
+float Sin32(float x) 
+{
+    float t = x * (float)(1.0f / TAU64); /* this better get eval at comptime */
+    t -= (i64)t;
+    Bool8 ShouldBeNegated = t >= .5;
+    if (ShouldBeNegated)
+        t -= .5;
+    t = t*TAU64 - PI64/2;
+                                                                                    
+    float t2 = t*t;
+    float y = 1
+        - t2 * (float)INV_2_FACTORIAL
+        + t2*t2 * (float)(MAGIC / 24.0f); 
+    if (ShouldBeNegated)
+        return -y;
+    return y;
+}
+
+
+#undef MAGIC
+#undef INV_2_FACTORIAL
+#undef TAU32
+#undef TAU64
+
+
+

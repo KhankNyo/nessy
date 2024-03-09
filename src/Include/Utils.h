@@ -38,5 +38,56 @@ isize AppendHex(char *Buffer, isize BufferSize, isize At, int DigitCount, u32 He
 isize FormatString(char *Buffer, isize BufferSize, ...);
 isize FormatStringArgs(char *Buffer, isize BufferSize, va_list Args);
 
+
+
+/* 
+ * these trig functions are about an order of magnitude faster than the standard library's version, 
+ * but they don't accept negative numbers and have high error percentage.
+ * They are good enough for audio though
+Error percentage: 
+    are relative to libc's functions, note: Sin32 was compared with sin not sinf
+    --------------- Sin64 ---------------
+    Largest diff: 0.005566
+    Largest err%: 21382742.743425%
+    Ave err%: 5.426688%
+
+    --------------- Sin32 ---------------
+    Largest diff: 0.026799
+    Largest err%: 21382565.680780%
+    Ave err%: 8.757294%
+
+
+Benchmark:
+    source: 
+"""""
+    double ts = clock();
+    for (double x = Start; x <= End; x += Delta) {
+        volatile Typename _ = FnName(x);
+    }
+    printf("%s bench: %fms\n", #FnName, (clock() - ts) * 1000 / CLOCKS_PER_SEC);
+""""""
+    where   FnName is the individual function: sin, sinf, Sin32, Sin64
+            Start = 0.0
+            End = 200000.0
+            Delta = 0.001
+            Typename is float for: sinf, Sin32
+                        double for sin,  Sin64
+    Note that x always has to be of type double because 
+        the sigfig for Delta + End (8) exceeds 32-bit float's maximum sigfig (7), 
+        resulting in a + 0 instead of + .001
+    Compiled with gcc 13.2.0, flags: -Ofast -flto
+    Ran on an i5 7400
+
+    Sin32 bench: 803.000000ms
+    Sin64 bench: 684.000000ms
+    sinf bench: 9168.000000ms
+    sin bench: 8594.000000ms
+
+    interestingly, the 32 bit float versions are slower than the 64 bit ones, 
+    probably because of the implicit conversions from double to float at the function call site
+*/
+float Sin32(float t);
+double Sin64(double t);
+
 #endif /* UTILS_H */
 
