@@ -28,6 +28,7 @@ typedef struct Win32_Rect
 
 
 
+
 static struct {
     HWND MainWindow,
          StatusWindow,
@@ -46,13 +47,7 @@ static double sWin32_FontSize = -16.;
 static double sWin32_TimerFrequency;
 static Nes_DisplayableStatus sWin32_DisplayableStatus;
 static Platform_FrameBuffer sWin32_FrameBuffer;
-
-static OVERLAPPED sWin32_AsyncFileReader;
-static HANDLE sWin32_FileHandle = INVALID_HANDLE_VALUE;
-static void *sWin32_FileBuffer;
-static isize sWin32_FileBufferSize;
-
-
+static BufferData sWin32_StaticBuffer;
 
 
 
@@ -267,53 +262,40 @@ static OPENFILENAMEA Win32_CreateFileSelectionPrompt(DWORD PromptFlags)
     return DialogueConfig;
 }
 
-static HANDLE Win32_ReadFileAsync(const char *FileName, DWORD dwCreationDisposition)
+
+static BufferData Win32_ReadFileSync(const char *FileName, DWORD dwCreationDisposition)
 {
-    HANDLE FileHandle = OPEN_FILE(FileName, GENERIC_READ, dwCreationDisposition, FILE_FLAG_OVERLAPPED);
+    HANDLE FileHandle = OPEN_FILE(FileName, GENERIC_READ, dwCreationDisposition, 0);
     if (INVALID_HANDLE_VALUE == FileHandle)
-    {
-        Win32_SystemError("Unable to open file");
-        return INVALID_HANDLE_VALUE;
-    }
+        goto CreateFileFailed;
 
     LARGE_INTEGER ArchaicFileSize;
     if (!GetFileSizeEx(FileHandle, &ArchaicFileSize))
-    {
-        Win32_SystemError("Unable to retrieve file size");
-        goto CloseFile;
-    }
+        goto GetFileSizeFailed;
 
-    sWin32_AsyncFileReader = (OVERLAPPED){
-        .Offset = 0,
-        .OffsetHigh = 0,
-        .hEvent = CreateEventA(NULL, FALSE, FALSE, "AsyncReader")
-    };
-    if (INVALID_HANDLE_VALUE == sWin32_AsyncFileReader.hEvent)
-    {
-        Win32_SystemError("Unable to read file asynchronously");
-        goto CloseFile;
-    }
+    isize FileBufferSize = ArchaicFileSize.QuadPart;
+    void *Buffer = Win32_AllocateMemory(FileBufferSize);
+    if (NULL == Buffer)
+        goto AllocateMemoryFailed;
 
-    sWin32_FileBufferSize = ArchaicFileSize.QuadPart;
-    sWin32_FileBuffer = Win32_AllocateMemory(sWin32_FileBufferSize);
-    DWORD BytesRead;
-    if (!ReadFile(
-            FileHandle, 
-            sWin32_FileBuffer, 
-            sWin32_FileBufferSize, 
-            &BytesRead, 
-            &sWin32_AsyncFileReader
-        ) && GetLastError() != ERROR_IO_PENDING)
-    {
-        Win32_SystemError("Unable to read file");
-        goto CancelIO;
-    }
-    return FileHandle;
-CancelIO:
-    CancelIo(FileHandle);
-CloseFile:
+    DWORD ReadSize;
+    if (!ReadFile(FileHandle, Buffer, FileBufferSize, &ReadSize, NULL) || ReadSize != FileBufferSize)
+        goto ReadFileFailed;
+
     CloseHandle(FileHandle);
-    return INVALID_HANDLE_VALUE;
+    return (BufferData){
+        .ViewPtr = Buffer,
+        .SizeBytes = FileBufferSize
+    };
+
+ReadFileFailed:
+    Win32_DeallocateMemory(Buffer);
+AllocateMemoryFailed:
+GetFileSizeFailed:
+    CloseHandle(FileHandle);
+CreateFileFailed:
+    Win32_SystemError("Unable to open file");
+    return (BufferData) { 0 };
 }
 
 
@@ -549,23 +531,23 @@ static LRESULT CALLBACK Win32_MainWndProc(HWND Window, UINT Msg, WPARAM WParam, 
         {
         case 'H':
         {
-            Nes_OnEmulatorToggleHalt();
+            Nes_OnEmulatorToggleHalt(sWin32_StaticBuffer);
         } break;
         case 'R':
         {
-            Nes_OnEmulatorReset();
+            Nes_OnEmulatorReset(sWin32_StaticBuffer);
         } break;
         case 'F':
         {
-            Nes_OnEmulatorSingleFrame();
+            Nes_OnEmulatorSingleFrame(sWin32_StaticBuffer);
         } break;
         case 'P':
         {
-            Nes_OnEmulatorTogglePalette();
+            Nes_OnEmulatorTogglePalette(sWin32_StaticBuffer);
         } break;
         case VK_SPACE:
         {
-            Nes_OnEmulatorSingleStep();
+            Nes_OnEmulatorSingleStep(sWin32_StaticBuffer);
         } break;
         }
     } break;
@@ -575,16 +557,23 @@ static LRESULT CALLBACK Win32_MainWndProc(HWND Window, UINT Msg, WPARAM WParam, 
         {
         case WIN32_FILE_MENU_OPEN:
         {
-            if (INVALID_HANDLE_VALUE != sWin32_FileHandle)
-            {
-                Win32_SystemError("Cannot open file at this time.");
-                break;
-            }
-
             OPENFILENAMEA Prompt = Win32_CreateFileSelectionPrompt(0);
             if (GetOpenFileNameA(&Prompt))
             {
-                sWin32_FileHandle = Win32_ReadFileAsync(Prompt.lpstrFile, OPEN_EXISTING);
+                BufferData Buffer = Win32_ReadFileSync(Prompt.lpstrFile, OPEN_EXISTING);
+                if (Buffer.ViewPtr)
+                {
+                    const char *ErrorMessage = Nes_ParseINESFile(
+                        sWin32_StaticBuffer,
+                        Buffer.ViewPtr, 
+                        Buffer.SizeBytes
+                    );
+                    if (ErrorMessage)
+                    {
+                        Win32_ErrorBox(ErrorMessage);
+                    }
+                    Win32_DeallocateMemory(Buffer.ViewPtr);
+                }
             }
         } break;
         }
@@ -605,45 +594,14 @@ static Bool8 Win32_PollInputs(void)
         TranslateMessage(&Msg);
         DispatchMessageA(&Msg);
     }
-
-    /* check async file operation */
-    if (sWin32_FileHandle != INVALID_HANDLE_VALUE)
-    {
-        DWORD BytesReadSoFar = sWin32_FileBufferSize;
-        if (GetOverlappedResult(
-            sWin32_FileHandle, 
-            &sWin32_AsyncFileReader, 
-            &BytesReadSoFar, 
-            FALSE
-        ) || GetLastError() != ERROR_IO_INCOMPLETE)
-        {
-            CloseHandle(sWin32_FileHandle);
-
-            const char *ErrorMessage = Nes_ParseINESFile(sWin32_FileBuffer, sWin32_FileBufferSize);
-            if (NULL != ErrorMessage)
-            {
-                Win32_ErrorBox(ErrorMessage);
-            }
-            Win32_DeallocateMemory(sWin32_FileBuffer);
-            sWin32_FileBuffer = NULL;
-            sWin32_FileBufferSize = 0;
-            sWin32_FileHandle = INVALID_HANDLE_VALUE;
-        }
-        else if (BytesReadSoFar != sWin32_FileBufferSize)
-        {
-            CancelIo(sWin32_FileHandle);
-            CloseHandle(sWin32_FileHandle);
-            sWin32_FileHandle = INVALID_HANDLE_VALUE;
-        }
-    }
     return true;
 }
 
 static void Win32_UpdateWindowTimer(HWND Window, UINT DontCare, UINT_PTR DontCare2, DWORD DontCare3)
 {
     (void)Window, (void)DontCare, (void)DontCare2, (void)DontCare3;
-    sWin32_DisplayableStatus = Nes_PlatformQueryDisplayableStatus();
-    sWin32_FrameBuffer = Nes_PlatformQueryFrameBuffer();
+    sWin32_DisplayableStatus = Nes_PlatformQueryDisplayableStatus(sWin32_StaticBuffer);
+    sWin32_FrameBuffer = Nes_PlatformQueryFrameBuffer(sWin32_StaticBuffer);
 
     InvalidateRect(sWin32_Gui.StatusWindow, NULL, FALSE);
     InvalidateRect(sWin32_Gui.GameWindow, NULL, FALSE);
@@ -657,14 +615,20 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
             .dwICC = ICC_UPDOWN_CLASS,
             .dwSize = sizeof CommCtrl,
         };
-        (void)InitCommonControlsEx(&CommCtrl);
+        BOOL CommCtrlOk = InitCommonControlsEx(&CommCtrl);
+        if (!CommCtrlOk)
+        {
+            Win32_SystemError("Warning: InitCommonControlsEx failed");
+        }
     }
+
 
     /* create main window */
     const char *ClassName = "NESSY";
     Win32_RegisterWindowClass(Instance, ClassName, Win32_MainWndProc, 0, COLOR_WHITE);
     sWin32_Gui.MainWindow = Win32_CreateWindow(NULL, "Nessy", ClassName, WS_CAPTION | WS_OVERLAPPEDWINDOW);
     SetTimer(sWin32_Gui.MainWindow, 999, 1000 / 100, Win32_UpdateWindowTimer);
+
 
     /* resize window */
     {
@@ -685,24 +649,48 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
         );
     }
     
+
     /* init timer */
     LARGE_INTEGER Tmp;
     QueryPerformanceFrequency(&Tmp);
     sWin32_TimerFrequency = 1000.0 / (double)Tmp.QuadPart;
 
 
-    Nes_OnEntry();
+    /* ask the game for the static buffer size, and then */
+    /* allocate game memory up front, the platform owns it */
+    sWin32_StaticBuffer.SizeBytes = Nes_RequestStaticBufferSize();
+    sWin32_StaticBuffer.ViewPtr = Win32_AllocateMemory(sWin32_StaticBuffer.SizeBytes);
+    if (NULL == sWin32_StaticBuffer.ViewPtr)
+    {
+        Win32_Fatal("Out of memory");
+    }
+
+
+    /* call the emulator's entry point */
+    Nes_OnEntry(sWin32_StaticBuffer);
+
+
+    /* event loop */
     double TimeOrigin = Platform_GetTimeMillisec();
     while (Win32_PollInputs())
     {
         double Now = Platform_GetTimeMillisec();
-        Nes_OnLoop(Now - TimeOrigin);
+        Nes_OnLoop(sWin32_StaticBuffer, Now - TimeOrigin);
     }
-    Nes_AtExit();
 
-    /* don't need to clean up the window, windows does it for us */
+
+    /* exiting */
+    Nes_AtExit(sWin32_StaticBuffer);
+
+
+    /* don't need to clean up the window, windows does it faster than us */
     (void)sWin32_Gui.MainWindow;
-    return 0;
+    /* don't need to free the memory, windows does it faster than us */
+    (void)sWin32_StaticBuffer;
+
+
+    /* gracefully exits */
+    ExitProcess(0);
 }
 
 
@@ -713,6 +701,8 @@ double Platform_GetTimeMillisec(void)
     return (double)Now.QuadPart * sWin32_TimerFrequency;
 }
 
+/* TODO: the GetKeyState function gets the physical state of the keyboard at any given moment, 
+ * but we only care about the state of the keyboard when the game window is being focused */
 Nes_ControllerStatus Platform_GetControllerState(void)
 {
     u16 Left = GetKeyState('A') < 0 || GetKeyState(VK_LEFT) < 0; 

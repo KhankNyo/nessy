@@ -23,6 +23,14 @@ typedef struct SmallString {
     char Data[64];
 } SmallString;
 
+typedef struct BufferData 
+{
+    void *ViewPtr; /* whoever creates the buffer data struct owns the pointer */
+    isize SizeBytes;
+} BufferData;
+
+
+
 #define STATIC_ARRAY_SIZE(Arr) (sizeof(Arr) / sizeof((Arr)[0]))
 #define IN_RANGE(LowRange, n, HighRange) ((LowRange) <= (n) && (n) <= (HighRange))
 #define strfy_(x) #x
@@ -52,6 +60,11 @@ typedef struct SmallString {
 #define AAA(OpcodeByte) (((OpcodeByte) >> 5) & 0x7)
 #define BBB(OpcodeByte) (((OpcodeByte) >> 2) & 0x7)
 #define CC(OpcodeByte)  ((OpcodeByte) & 0x3)
+
+
+#define MB (1024 * 1024)
+#define KB (1024)
+
 
 
 #endif /* COMMON_H */

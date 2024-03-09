@@ -16,6 +16,13 @@
 #define NES_PATTERN_TABLE_WIDTH_PIX 16*8
 #define NES_PATTERN_TABLE_HEIGHT_PIX 16*8
 
+
+typedef struct Platform_FrameBuffer 
+{
+    const void *Data;
+    u32 Width, Height;
+} Platform_FrameBuffer;
+
 typedef struct Nes_DisplayableStatus 
 {
     u16 PC, SP, StackValue;
@@ -32,33 +39,39 @@ typedef struct Nes_DisplayableStatus
     char DisasmAfterPC[512];
 } Nes_DisplayableStatus;
 
-typedef struct Platform_FrameBuffer 
-{
-    const void *Data;
-    u32 Width, Height;
-} Platform_FrameBuffer;
-
 typedef u16 Nes_ControllerStatus;
 
 
+/* functions for the platform to request data from the emulator */
+/* NOTE: the memory requested is guaranteed to be fixed throughout the program, 
+ * so pointers to locations inside the memory buffer can be cached */
+/* if the platform was unable to provide a suitable buffer, all Nes_* functions will never be called */
+/* the memory given to Nes_OnEntry is guaranteed to be initialized with zero */
+isize Nes_PlatformQueryStaticBufferSize(void);
+Platform_FrameBuffer Nes_PlatformQueryFrameBuffer(BufferData StaticBuffer);
+Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(BufferData StaticBuffer);
 
-Platform_FrameBuffer Nes_PlatformQueryFrameBuffer(void);
-Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(void);
 
-/* returns NULL on success, or a static error string on failure (no lifetime) */
-const char *Nes_ParseINESFile(const void *FileBuffer, isize BufferSizeBytes);
-void Nes_OnEntry(void);
-void Nes_OnLoop(double ElapsedTime);
-void Nes_AtExit(void);
-
-void Nes_OnEmulatorToggleHalt(void);
-void Nes_OnEmulatorTogglePalette(void);
-void Nes_OnEmulatorReset(void);
-void Nes_OnEmulatorSingleStep(void);
-void Nes_OnEmulatorSingleFrame(void);
-
+/* functions for the emulator to request information from the platform */
 double Platform_GetTimeMillisec(void);
 Nes_ControllerStatus Platform_GetControllerState(void);
+
+
+/* functions for the emulator to work in */
+/* NOTE: Nes_OnEntry and the rest of the functions below it are 
+ * only called when the platform was able to create a buffer that has 
+ * the size requested by Nes_PlatformQueryStaticBufferSize */
+void Nes_OnEntry(BufferData StaticBuffer);
+void Nes_OnLoop(BufferData StaticBuffer, double ElapsedTime);
+void Nes_AtExit(BufferData StaticBuffer);
+/* event handlers */
+void Nes_OnEmulatorToggleHalt(BufferData StaticBuffer);
+void Nes_OnEmulatorTogglePalette(BufferData StaticBuffer);
+void Nes_OnEmulatorReset(BufferData StaticBuffer);
+void Nes_OnEmulatorSingleStep(BufferData StaticBuffer);
+void Nes_OnEmulatorSingleFrame(BufferData StaticBuffer);
+/* returns NULL on success, or a static error string on failure (no lifetime) */
+const char *Nes_ParseINESFile(BufferData StaticBuffer, const void *FileBuffer, isize BufferSizeBytes);
 
 
 #endif /* NES_H */

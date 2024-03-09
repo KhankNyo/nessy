@@ -11,8 +11,8 @@
 
 
 typedef struct NESPPU NESPPU;
-typedef void (*NESPPU_FrameCompletionCallback)(NESPPU *);
-typedef void (*NESPPU_NmiCallback)(NESPPU *);
+typedef void (*NESPPU_FrameCompletionCallback)(void *);
+typedef void (*NESPPU_NmiCallback)(void *);
 
 /* CTRL */
 #define PPUCTRL_NAMETABLE_X     (1 << 0)
@@ -116,6 +116,7 @@ struct NESPPU
     u8 VisibleSpriteCount;
     Bool8 Spr0IsVisible;
 
+    void *UserData;
     NESPPU_FrameCompletionCallback FrameCompletionCallback;
     NESPPU_NmiCallback NmiCallback;
     u32 *ScreenOutput;
@@ -208,6 +209,7 @@ static u32 sPPURGBPalette[] = {
 
 
 NESPPU NESPPU_Init(
+    void *UserData,
     NESPPU_FrameCompletionCallback FrameCallback, 
     NESPPU_NmiCallback NmiCallback,
     u32 BackBuffer[],
@@ -218,7 +220,7 @@ NESPPU NESPPU_Init(
         .FrameCompletionCallback = FrameCallback,
         .NmiCallback = NmiCallback,
         .CartridgeHandle = CartridgeHandle,
-        .Mask = PPUMASK_SHOW_BG,
+        .UserData = UserData,
     };
     for (uint i = 0; i < STATIC_ARRAY_SIZE(This.PaletteColorIndex); i++)
     {
@@ -520,7 +522,7 @@ void NESPPU_ExternalWrite(NESPPU *This, u16 Address, u8 Byte)
         && NmiWasLow
         && (This->Ctrl & PPUCTRL_NMI_ENABLE))
         {
-            This->NmiCallback(This);
+            This->NmiCallback(This->UserData);
         }
     } break;
     case PPU_MASK: This->Mask = Byte; break;
@@ -1054,7 +1056,7 @@ Bool8 NESPPU_StepClock(NESPPU *This)
         {
             if (This->Ctrl & PPUCTRL_NMI_ENABLE)
             {
-                This->NmiCallback(This);
+                This->NmiCallback(This->UserData);
             }
         }
         
@@ -1075,7 +1077,7 @@ Bool8 NESPPU_StepClock(NESPPU *This)
         if (This->Scanline == 261) /* last scanline */
         {
             This->Scanline = -1; /* -1 to wrap around later */
-            This->FrameCompletionCallback(This);
+            This->FrameCompletionCallback(This->UserData);
             FrameCompleted = true;
             This->CurrentFrameIsOdd = !This->CurrentFrameIsOdd;
         }

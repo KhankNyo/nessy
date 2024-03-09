@@ -30,37 +30,35 @@ typedef struct NES
     u8 Ram[NES_CPU_RAM_SIZE];
 } NES;
 
-
-typedef enum EmulationMode 
+typedef enum NESEmulationMode 
 {
     EMUMODE_SINGLE_STEP,
     EMUMODE_SINGLE_FRAME,
-} EmulationMode;
+} NESEmulationMode;
 
 
 
-static NESDisassemblerState sDisassemblerState = {
-    .Count = 16,
-    .BytesPerLine = 3,
-};
+typedef struct Emulator 
+{
+    /* the nes */
+    NES Nes;
+    NESDisassemblerState DisassemblerState;
+    NESCartridge Cartridge;
 
-static NESCartridge sConnectedCartridge;
-static u32 sScreenBuffers[2][NES_SCREEN_WIDTH * NES_SCREEN_HEIGHT];
-static u32 *sBackBuffer = sScreenBuffers[0];
-static u32 *sReadyBuffer = sScreenBuffers[1];
+    /* screen */
+    u32 ScreenBuffer[2][NES_SCREEN_BUFFER_SIZE];
+    u32 (*BackBuffer)[NES_SCREEN_BUFFER_SIZE];
+    u32 (*FrontBuffer)[NES_SCREEN_BUFFER_SIZE];
 
-static uint sCurrentPalette;
-static EmulationMode sEmulationMode = EMUMODE_SINGLE_STEP;
-static Bool8 sEmulationHalted = false;
-static Bool8 sEmulationDone = false;
-static NES sNes = {
-    .Cartridge = NULL,
-    .Ram = { 0 },
+    /* emulator */
+    uint CurrentPalette;
+    NESEmulationMode EmulationMode;
+    Bool8 EmulationHalted;
+    Bool8 EmulationDone;
 
-    .DMA = false,
-    .DMAOutOfSync = false,
-    .DMAAddr = 0,
-};
+    double ResidueTime;
+} Emulator;
+
 
 
 static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
@@ -102,9 +100,9 @@ static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
     /* 0x6000 - 0xFFFF */
     /* Save Ram */
     /* Cartridge ROM */
-    else if (sNes.Cartridge)
+    else if (Nes->Cartridge)
     {
-        NESCartridge_CPUWrite(sNes.Cartridge, Address, Byte);
+        NESCartridge_CPUWrite(Nes->Cartridge, Address, Byte);
     }
 }
 
@@ -141,40 +139,54 @@ static u8 NesInternal_ReadByte(void *UserData, u16 Address)
     /* 0x6000 - 0xFFFF */
     /* Save Ram */
     /* Cartridge ROM */
-    else if (sNes.Cartridge)
+    else if (Nes->Cartridge)
     {
-        return NESCartridge_CPURead(sNes.Cartridge, Address);
+        return NESCartridge_CPURead(Nes->Cartridge, Address);
     }
     return 0xEA;
 }
 
-static void Nes_ConnectCartridge(NESCartridge NewCartridge)
+static void Nes_ConnectCartridge(Emulator *Emu, NESCartridge NewCartridge)
 {
-    if (sNes.Cartridge)
+    NES *Nes = &Emu->Nes;
+    if (Nes->Cartridge)
     {
+        /* there was a physical cartridge inside the nes, 
+         * destroy it to make room for a new one */
         /* TODO: save?? */
-        NESCartridge_Destroy(sNes.Cartridge);
+        NESCartridge_Destroy(Nes->Cartridge);
     }
     else
     {
-        sNes.Cartridge = &sConnectedCartridge;
+        /* there wasn't any physical cartridge inside the Nes yet, put one in */
+        Nes->Cartridge = &Emu->Cartridge;
     }
-    *sNes.Cartridge = NewCartridge;
+
+    /* update the physical contents of the current cartridge inside the nes */
+    *Nes->Cartridge = NewCartridge;
 }
 
 
-const char *Nes_ParseINESFile(const void *INESFile, isize FileSize)
+const char *Nes_ParseINESFile(BufferData StaticBuffer, const void *INESFile, isize FileSize)
 {
+    /* 
+     * refer to this before reading 
+     * https://www.nesdev.org/wiki/INES
+     */
+
     isize DataSectionOffset = 16;
-    if (FileSize < 16 * 1024 + DataSectionOffset)
-        goto ErrorFileTooSmall;
+    {
+        isize MinimalINesFileSize = 16 * 1024 + DataSectionOffset;
+        if (FileSize < MinimalINesFileSize)
+            goto ErrorFileTooSmall;
+    }
 
 
     /* check signature */
     const u8 *BytePtr = INESFile;
     if (!Memcmp(
         BytePtr, 
-        BYTE_ARRAY(0x4E, 0x45, 0x53, 0x1A), /* NES\x1A */
+        BYTE_ARRAY(0x4E, 0x45, 0x53, 0x1A), /* NES\x1A, iNes file signature */
         4
     ))
     {
@@ -186,29 +198,31 @@ const char *Nes_ParseINESFile(const void *INESFile, isize FileSize)
     const u8 *FileDataStart = BytePtr + DataSectionOffset;
 
 
-    /* verify file size */
-    isize PrgRomSize = ((isize)BytePtr[4]) * 16 * 1024;
-    isize ChrRomSize = ((isize)BytePtr[5]) * 8  * 1024;
+    /* read flags */
+    u8 Flag6 = BytePtr[6];  /* no good name for this magic number */
+    u8 Flag7 = BytePtr[7];  /* no good name for this magic number */
+    if (Flag6 & (1 << 2)) /* 512 byte trainer (don't care) */
+    {
+        FileDataStart += 512;
+        DataSectionOffset += 512;
+    }
+
+
+    /* verify file size (again) */
+    isize PrgRomSize = ((isize)BytePtr[4]) * 16 * KB;   /* prg rom is in 16kb chunk */
+    isize ChrRomSize = ((isize)BytePtr[5]) * 8  * KB;   /* chr rom is in 8 kb chunk */
     if (FileSize < ChrRomSize + PrgRomSize + DataSectionOffset)
         goto ErrorFileTooSmall;
     
 
     /* read flags */
-    u8 Flag6 = BytePtr[6];
-    u8 Flag7 = BytePtr[7];
-    u8 MapperID = (Flag6 >> 4) | (Flag7 & 0xF0);
+    u8 MapperID = (Flag6 >> 4) | (Flag7 & 0xF0);        
     NESNametableMirroring NametableMirroring = NAMETABLE_HORIZONTAL;
     if (Flag6 & (1 << 0)) /* name table vertical */
     {
         NametableMirroring = NAMETABLE_VERTICAL;
     }
     Bool8 AlternativeNametableLayout = (Flag6 & (1 << 3)) != 0;
-
-
-    if (Flag6 & (1 << 2)) /* 512 byte trainer (don't care) */
-    {
-        FileDataStart += 512;
-    }
     const u8 *FilePrgRom = FileDataStart;
     const u8 *FileChrRom = FileDataStart + PrgRomSize;
 
@@ -217,14 +231,14 @@ const char *Nes_ParseINESFile(const void *INESFile, isize FileSize)
     isize PrgRamSize = 0;
     isize ChrRamSize = 0;
     Bool8 HasBusConflict = false;
-    NESCartridge Cartridge = { 0 };
     uint INESFileVersion = (Flag7 >> 2) & 0x3;
     if (0 == INESFileVersion 
     || 1 == INESFileVersion)
     {
+        /* no chr rom, implying chr ram */
         if (ChrRomSize == 0)
         {
-            ChrRamSize = 8*1024;
+            ChrRamSize = 8 * KB;
             FileChrRom = NULL;
         }
     }
@@ -258,7 +272,9 @@ const char *Nes_ParseINESFile(const void *INESFile, isize FileSize)
         return "Unknown iNes file version (3)";
     }
 
-    Cartridge = NESCartridge_Init(
+
+    Emulator *Emu = StaticBuffer.ViewPtr;
+    NESCartridge Cartridge = NESCartridge_Init(
         FilePrgRom, PrgRomSize, 
         FileChrRom, ChrRomSize, 
         PrgRamSize, ChrRamSize, 
@@ -273,48 +289,51 @@ const char *Nes_ParseINESFile(const void *INESFile, isize FileSize)
     }
     else
     {
-        Nes_ConnectCartridge(Cartridge);
+        Nes_ConnectCartridge(Emu, Cartridge);
         return NULL; /* no error */
     }
 
 ErrorFileTooSmall:
-    return "File too small (must be at least 16kb)";
+    return "File too small (must be at least 16kb + 16 bytes)";
 }
 
 
-Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(void)
+Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(BufferData StaticBuffer)
 {
-    u16 StackValue = (u16)sNes.Ram[0x100 + (u8)(sNes.CPU.SP + 1)];
-    StackValue |= (u16)sNes.Ram[0x100 + (u8)(sNes.CPU.SP + 2)] << 8;
+    Emulator *Emu = StaticBuffer.ViewPtr;
+    NES *Nes = &Emu->Nes;
+
+    u16 StackValue = (u16)Nes->Ram[0x100 + (u8)(Nes->CPU.SP + 1)];
+    StackValue |= (u16)Nes->Ram[0x100 + (u8)(Nes->CPU.SP + 2)] << 8;
 
     Nes_DisplayableStatus Status = {
-        .A = sNes.CPU.A,
-        .X = sNes.CPU.X,
-        .Y = sNes.CPU.Y,
-        .PC = sNes.CPU.PC,
-        .SP = sNes.CPU.SP + 0x100,
+        .A = Nes->CPU.A,
+        .X = Nes->CPU.X,
+        .Y = Nes->CPU.Y,
+        .PC = Nes->CPU.PC,
+        .SP = Nes->CPU.SP + 0x100,
         .StackValue = StackValue,
 
-        .N = MC6502_FlagGet(sNes.CPU.Flags, FLAG_N),
-        .Z = MC6502_FlagGet(sNes.CPU.Flags, FLAG_Z),
-        .V = MC6502_FlagGet(sNes.CPU.Flags, FLAG_V),
-        .C = MC6502_FlagGet(sNes.CPU.Flags, FLAG_C),
-        .I = MC6502_FlagGet(sNes.CPU.Flags, FLAG_I),
-        .U = MC6502_FlagGet(sNes.CPU.Flags, FLAG_UNUSED),
-        .B = MC6502_FlagGet(sNes.CPU.Flags, FLAG_B),
-        .D = MC6502_FlagGet(sNes.CPU.Flags, FLAG_D),
+        .N = MC6502_FlagGet(Nes->CPU.Flags, FLAG_N),
+        .Z = MC6502_FlagGet(Nes->CPU.Flags, FLAG_Z),
+        .V = MC6502_FlagGet(Nes->CPU.Flags, FLAG_V),
+        .C = MC6502_FlagGet(Nes->CPU.Flags, FLAG_C),
+        .I = MC6502_FlagGet(Nes->CPU.Flags, FLAG_I),
+        .U = MC6502_FlagGet(Nes->CPU.Flags, FLAG_UNUSED),
+        .B = MC6502_FlagGet(Nes->CPU.Flags, FLAG_B),
+        .D = MC6502_FlagGet(Nes->CPU.Flags, FLAG_D),
     };
 
-    NESPPU_GetRGBPalette(&sNes.PPU, Status.Palette, STATIC_ARRAY_SIZE(Status.Palette));
+    NESPPU_GetRGBPalette(&Nes->PPU, Status.Palette, STATIC_ARRAY_SIZE(Status.Palette));
     Status.PatternTablesAvailable = NESPPU_GetPatternTables(
-        &sNes.PPU, 
+        &Nes->PPU, 
         Status.LeftPatternTable, 
         Status.RightPatternTable, 
-        sCurrentPalette
+        Emu->CurrentPalette
     );
-    if (sNes.Cartridge)
+    if (Nes->Cartridge)
     {
-        Nes_Disassemble(&sDisassemblerState, sNes.Cartridge, Status.PC, 
+        Nes_Disassemble(&Emu->DisassemblerState, Nes->Cartridge, Status.PC, 
             Status.DisasmBeforePC, sizeof Status.DisasmBeforePC,
             Status.DisasmAtPC, sizeof Status.DisasmAtPC,
             Status.DisasmAfterPC, sizeof Status.DisasmAfterPC
@@ -323,10 +342,29 @@ Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(void)
     return Status;
 }
 
-Platform_FrameBuffer Nes_PlatformQueryFrameBuffer(void)
+static void NesInternal_OnPPUFrameCompletion(void *UserData)
 {
+    Emulator *Emu = UserData;
+
+    /* swap the front and back buffers */
+    u32 (*Tmp)[] = Emu->BackBuffer;
+    Emu->BackBuffer = Emu->FrontBuffer;
+    Emu->FrontBuffer = Tmp;
+
+    Emu->Nes.PPU.ScreenOutput = Emu->BackBuffer[0];
+}
+
+static void NesInternal_OnPPUNmi(void *UserData)
+{
+    Emulator *Emu = UserData;
+    MC6502_Interrupt(&Emu->Nes.CPU, VEC_NMI);
+}
+
+Platform_FrameBuffer Nes_PlatformQueryFrameBuffer(BufferData StaticBuffer)
+{
+    Emulator *Emu = StaticBuffer.ViewPtr;
     Platform_FrameBuffer Frame = {
-        .Data = sReadyBuffer,
+        .Data = Emu->FrontBuffer,
         .Width = NES_SCREEN_WIDTH,
         .Height = NES_SCREEN_HEIGHT,
     };
@@ -334,31 +372,45 @@ Platform_FrameBuffer Nes_PlatformQueryFrameBuffer(void)
 }
 
 
-static void NesInternal_OnPPUFrameCompletion(NESPPU *PPU)
-{
-    /* swap the front and back buffers */
-    u32 *Tmp = sReadyBuffer;
-    sReadyBuffer = sBackBuffer;
-    sBackBuffer = Tmp;
 
-    PPU->ScreenOutput = sBackBuffer;
+
+isize Nes_RequestStaticBufferSize(void)
+{
+    return sizeof(Emulator);
 }
 
-static void NesInternal_OnPPUNmi(NESPPU *PPU)
+void Nes_OnEntry(BufferData StaticBuffer)
 {
-    (void)PPU;
-    MC6502_Interrupt(&sNes.CPU, VEC_NMI);
-}
+    DEBUG_ASSERT(StaticBuffer.ViewPtr);
+    DEBUG_ASSERT(StaticBuffer.SizeBytes == sizeof(Emulator));
 
-void Nes_OnEntry(void)
-{
-    sNes.CPU = MC6502_Init(0, &sNes, NesInternal_ReadByte, NesInternal_WriteByte);
-    sNes.PPU = NESPPU_Init(
-        NesInternal_OnPPUFrameCompletion, 
-        NesInternal_OnPPUNmi,
-        sBackBuffer, 
-        &sNes.Cartridge
+
+    Emulator *Emu = StaticBuffer.ViewPtr;
+
+    Emu->BackBuffer = &Emu->ScreenBuffer[0];
+    Emu->FrontBuffer = &Emu->ScreenBuffer[1];
+    Emu->EmulationDone = false;
+    Emu->EmulationHalted = false;
+    Emu->EmulationMode = EMUMODE_SINGLE_FRAME;
+    Emu->CurrentPalette = 0;
+
+    Emu->Nes.CPU = MC6502_Init(
+        0, 
+        &Emu->Nes, 
+        NesInternal_ReadByte, 
+        NesInternal_WriteByte
     );
+    Emu->Nes.PPU = NESPPU_Init(
+        Emu,
+        NesInternal_OnPPUFrameCompletion, 
+        NesInternal_OnPPUNmi, 
+        *Emu->BackBuffer, 
+        &Emu->Nes.Cartridge
+    );
+    Emu->DisassemblerState = (NESDisassemblerState) {
+        .Count = 16,
+        .BytesPerLine = 3,
+    };
 }
 
 
@@ -409,89 +461,97 @@ static Bool8 Nes_StepClock(NES *Nes)
 }
 
 
-void Nes_OnLoop(double ElapsedTime)
+void Nes_OnLoop(BufferData StaticBuffer, double ElapsedTime)
 {
-    static double ResidueTime;
-    if (!sEmulationHalted)
+    Emulator *Emu = StaticBuffer.ViewPtr;
+    NES *Nes = &Emu->Nes;
+
+    if (!Emu->EmulationHalted)
     {
-        if (ResidueTime < ElapsedTime)
+        if (Emu->ResidueTime < ElapsedTime)
         {
-            ResidueTime += 1000.0 / 60.0;
+            Emu->ResidueTime += 1000.0 / 60.0;
             Bool8 FrameCompleted = false;
             do {
-                FrameCompleted = Nes_StepClock(&sNes);
+                FrameCompleted = Nes_StepClock(Nes);
             } while (!FrameCompleted);
         }
     }
     else
     {
-        ResidueTime = ElapsedTime;
-        if (sEmulationDone)
+        Emu->ResidueTime = ElapsedTime;
+        if (Emu->EmulationDone)
             return;
 
-        sEmulationDone = true;
-        switch (sEmulationMode)
+        Emu->EmulationDone = true;
+        switch (Emu->EmulationMode)
         {
         case EMUMODE_SINGLE_STEP:
         {
             do {
-                Nes_StepClock(&sNes);
-            } while (sNes.CPU.CyclesLeft > 0 && !sNes.CPU.Halt);
-            Nes_StepClock(&sNes);
-            Nes_StepClock(&sNes);
-            Nes_StepClock(&sNes);
+                Nes_StepClock(Nes);
+            } while (Nes->CPU.CyclesLeft > 0 && !Nes->CPU.Halt);
+            Nes_StepClock(Nes);
+            Nes_StepClock(Nes);
+            Nes_StepClock(Nes);
         } break;
         case EMUMODE_SINGLE_FRAME:
         {
             Bool8 FrameDone;
             do {
-                FrameDone = Nes_StepClock(&sNes);
+                FrameDone = Nes_StepClock(Nes);
             } while (!FrameDone);
         } break;
         }
     }
 }
 
-void Nes_AtExit(void)
+void Nes_AtExit(BufferData StaticBuffer)
 {
-    if (sNes.Cartridge)
+    Emulator *Emu = StaticBuffer.ViewPtr;
+    if (Emu->Nes.Cartridge)
     {
-        NESCartridge_Destroy(sNes.Cartridge);
+        NESCartridge_Destroy(Emu->Nes.Cartridge);
     }
 }
 
 
 
 
-void Nes_OnEmulatorToggleHalt(void)
+void Nes_OnEmulatorToggleHalt(BufferData StaticBuffer)
 {
-    sEmulationHalted = !sEmulationHalted;
-    sEmulationDone = true;
+    Emulator *Emu = StaticBuffer.ViewPtr;
+    Emu->EmulationDone = true;
+    Emu->EmulationHalted = !Emu->EmulationHalted;
 }
 
-void Nes_OnEmulatorSingleStep(void)
+void Nes_OnEmulatorSingleStep(BufferData StaticBuffer)
 {
-    sEmulationMode = EMUMODE_SINGLE_STEP;
-    sEmulationDone = false;
+    Emulator *Emu = StaticBuffer.ViewPtr;
+    Emu->EmulationMode = EMUMODE_SINGLE_STEP;
+    Emu->EmulationDone = false;
 }
 
-void Nes_OnEmulatorSingleFrame(void)
+void Nes_OnEmulatorSingleFrame(BufferData StaticBuffer)
 {
-    sEmulationMode = EMUMODE_SINGLE_FRAME;
-    sEmulationDone = false;
+    Emulator *Emu = StaticBuffer.ViewPtr;
+    Emu->EmulationMode = EMUMODE_SINGLE_FRAME;
+    Emu->EmulationDone = false;
 }
 
-void Nes_OnEmulatorReset(void)
+void Nes_OnEmulatorReset(BufferData StaticBuffer)
 {
-    sNes.Clk = 0;
-    MC6502_Reset(&sNes.CPU);
-    NESPPU_Reset(&sNes.PPU);
+    Emulator *Emu = StaticBuffer.ViewPtr;
+    Emu->Nes.Clk = 0;
+    MC6502_Reset(&Emu->Nes.CPU);
+    NESPPU_Reset(&Emu->Nes.PPU);
 }
 
-void Nes_OnEmulatorTogglePalette(void)
+void Nes_OnEmulatorTogglePalette(BufferData StaticBuffer)
 {
-    sCurrentPalette++;
-    sCurrentPalette &= 0x7;
+    Emulator *Emu = StaticBuffer.ViewPtr;
+    Emu->CurrentPalette++;
+    Emu->CurrentPalette &= 0x7;
 }
 
 
