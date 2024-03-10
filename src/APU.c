@@ -6,19 +6,44 @@
 
 typedef struct Sequencer 
 {
-    Bool8 Enable;
-    Bool8 Looping;
+    double DutyCycle;
+    u16 Looping;
+    u16 LengthCounter;
     u16 Reload;
     u16 Timer;
-    u16 LengthCounter;
-    double DutyCycle;
+
+    /* envelope */
+    u8 Volume;
+    u16 DividerClock;
+    u16 DividerPeriodReload;
+    u8 DecayCounter;
+    Bool8 Enable;
+    Bool8 ConstantVolume;
+    Bool8 Start;
+
+    /* specific */
+    u16 NoiseShiftRegister:15;
+    u16 NoiseModeFlag;
 } Sequencer;
+
+typedef struct TriangleSequencer 
+{
+    Bool8 Ctrl;
+    Bool8 CounterReloadFlag;
+    u8 LinearCounter;
+    u8 CounterReload;
+    u16 TimerReload;
+    u16 Timer;
+    Bool8 Enable;
+} TriangleSequencer;
+
+#define COUNTER_STOP 0xFFFF
 
 typedef struct NESAPU 
 {
     Sequencer Pulse1;
     Sequencer Pulse2;
-    Sequencer Triangle;
+    TriangleSequencer Triangle;
     Sequencer Noise;
 
     u64 ClockCounter;
@@ -27,10 +52,23 @@ typedef struct NESAPU
     double AudioSample;
     double ElapsedTime;
     u8 LengthCounterTable[0x20];
+    u16 NTSCNoisePeriodTable[0x10];
 
     u32 RandSeed;
 } NESAPU;
 
+
+
+void NESAPU_Reset(NESAPU *This)
+{
+    This->ElapsedTime = 0;
+    This->Triangle = (TriangleSequencer) { 0 };
+    This->Pulse1 = (Sequencer) { 0 };
+    This->Pulse2 = (Sequencer) { 0 };
+    This->Noise = (Sequencer) { 
+        .NoiseShiftRegister = 1,
+    };
+}
 
 NESAPU NESAPU_Init(u64 SeedForNoiseGeneration)
 {
@@ -40,78 +78,95 @@ NESAPU NESAPU_Init(u64 SeedForNoiseGeneration)
             10, 254, 20,  2, 40,  4, 80,  6, 160,  8, 60, 10, 14, 12, 26, 14, 
             12,  16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30
         },
-        .RandSeed = SeedForNoiseGeneration,
+        .NTSCNoisePeriodTable = {
+            4, 8, 16, 32, 64, 96, 128, 160, 202, 254, 380, 508, 762, 1016, 2034, 4068
+        },
     };
+    NESAPU_Reset(&APU);
     return APU;
 }
 
 
 
-static double VariableDutySquareWave(double t, double DutyCycle, int HarmonicCount)
+typedef double (*SampleGenerator)(Sequencer *, double t);
+
+static double GenerateSquareWave(Sequencer *Seq, double t)
 {
-    double y1 = 0;
-    double y2 = 0;
-    for (int i = 1; i <= HarmonicCount; i++)
-    {
-        double x = i*t;
-        y1 += -Sint64(x) / i;
-        y2 += -Sint64(x - DutyCycle*i) / i;
-    }
-    return (2.0 / PI) * (y1 - y2);
+    double Freq = NES_CPU_CLK / (16.0 * (double)(Seq->Timer + 1));
+    t *= Freq;
+    return (t - (i64)t) < Seq->DutyCycle? 
+        1.0 : -1.0;
 }
 
 
-static double NESAPU_SequencerGenerateSquareSample(Sequencer *Seq, double t, int HarmonicCount)
+static double NESAPU_SequenceSample(Sequencer *Seq, double t, SampleGenerator SampleGenerator)
 {
     double Sample = 0;
-    if (Seq->Enable || Seq->LengthCounter)
-    {
-        double Frequency = NES_CPU_CLK / (16.0 * (double)(Seq->Timer + 1));
-        Sample = VariableDutySquareWave(Frequency*t, Seq->DutyCycle, HarmonicCount);
-        if (!Seq->Looping)
-            Seq->LengthCounter--;
-        if (0 == Seq->LengthCounter)
-            Seq->Enable = false;
-    }
-
+    Sample = SampleGenerator(Seq, t);
     return Sample;
 }
 
-static double NESAPU_SequencerGenerateTriangleSample(Sequencer *Seq, double t, int HarmonicCount)
+
+static void NESAPU_SequencerUpdateVolume(Sequencer *Seq)
 {
-    double Sample = 0;
-    if (Seq->Enable || Seq->LengthCounter)
+    if (!Seq->Start)
     {
-        /* half that of the square sample */
-        double Frequency = NES_CPU_CLK / (32.0 * (double)(Seq->Timer + 1));
-        for (int i = 1; i <= HarmonicCount; i++)
+        /* clock the divisor */
+        if (Seq->DividerClock == 0)
         {
-            double x = t*i*Frequency;
-            Sample += Sint64(x) / i;
+            Seq->DividerClock = Seq->Volume;
+            if (Seq->DecayCounter)
+                Seq->DecayCounter--;
+            else if (Seq->Looping)
+                Seq->DecayCounter = 15;
         }
-        Sample *= (2.0 / PI);
-
-        if (!Seq->Looping)
-            Seq->LengthCounter--;
-        if (0 == Seq->LengthCounter)
-            Seq->Enable = false;
-    }
-    return Sample;
-}
-
-static double NESAPU_SequencerGenerateNoiseSample(Sequencer *Seq, u32 *Seed)
-{
-    double Sample = 0;
-    if (Seq->Enable || Seq->LengthCounter)
-    {
-        Sample = (double)Rand(Seed) * (5.0 / UINT32_MAX);
-        if (!Seq->Looping)
+        else
         {
-            Seq->LengthCounter--;
+            Seq->DividerClock--;
         }
     }
-    else Seq->Enable = false;
-    return Sample;
+    else
+    {
+        Seq->Start = false;
+        Seq->DecayCounter = 15;
+        Seq->DividerClock = Seq->DividerPeriodReload;
+    }
+}
+
+static double NESAPU_SequencerGetVolume(Sequencer *Seq)
+{
+    if (Seq->ConstantVolume)
+        return (double)Seq->Volume / 15;
+    return (double)Seq->DecayCounter / 15;
+}
+
+static void NESAPU_UpdateTriangleSequencer(TriangleSequencer *Seq)
+{
+    if (Seq->CounterReloadFlag)
+    {
+        Seq->LinearCounter = Seq->CounterReload;
+    }
+    else if (Seq->LinearCounter)
+    {
+        Seq->LinearCounter--;
+    }
+
+    if (!Seq->Ctrl)
+    {
+        Seq->CounterReloadFlag = 0;
+    }
+}
+
+static double NESAPU_GetTriangleSample(TriangleSequencer *Seq, double t)
+{
+    if (!Seq->LinearCounter)
+        return 0;
+    double Freq = NES_CPU_CLK / (32.0 * (double)(Seq->Timer + 1));
+    t *= Freq;
+    t -= (i64)t;
+    if (t > .5)
+        return -t;
+    return t;
 }
 
 
@@ -120,13 +175,17 @@ void NESAPU_StepClock(NESAPU *This)
 #define IS_QUARTER_CLK(Clk) ((Clk) == 3729 || (Clk) == 7457 || (Clk) == 11186 || (Clk) == 14916)
 #define IS_HALF_CLK(Clk) ((Clk) == 7457 || (Clk) == 14916)
 
-    This->ElapsedTime += .3333333333333333 / NES_CPU_CLK;
     if (This->ClockCounter % 6 == 0)
     {
+        This->ElapsedTime += 2.0 / NES_CPU_CLK;
         This->FrameClockCounter++;
+
         /* adjust volume envelope */
         if (IS_QUARTER_CLK(This->FrameClockCounter))
         {
+            NESAPU_SequencerUpdateVolume(&This->Pulse1);
+            NESAPU_SequencerUpdateVolume(&This->Pulse2);
+            NESAPU_UpdateTriangleSequencer(&This->Triangle);
         }
         /* note length and freq sweep */
         if (IS_HALF_CLK(This->FrameClockCounter))
@@ -134,10 +193,14 @@ void NESAPU_StepClock(NESAPU *This)
         }
 
         /* clock pulse 1 */
-        double Pulse1 = NESAPU_SequencerGenerateSquareSample(&This->Pulse1, This->ElapsedTime, 20);
-        double Pulse2 = NESAPU_SequencerGenerateSquareSample(&This->Pulse2, This->ElapsedTime, 20);
-        double Triangle = NESAPU_SequencerGenerateTriangleSample(&This->Triangle, This->ElapsedTime, 20);
-        double Noise = 0;//NESAPU_SequencerGenerateNoiseSample(&This->Noise, &This->RandSeed);
+        double Pulse1 = 
+            NESAPU_SequencerGetVolume(&This->Pulse1)
+            * NESAPU_SequenceSample(&This->Pulse1, This->ElapsedTime, GenerateSquareWave); 
+        double Pulse2 = 
+            NESAPU_SequencerGetVolume(&This->Pulse2)
+            * NESAPU_SequenceSample(&This->Pulse2, This->ElapsedTime, GenerateSquareWave);
+        double Triangle = NESAPU_GetTriangleSample(&This->Triangle, This->ElapsedTime);
+        double Noise = 0;
         double DMC = 0;
 
         /* sound mixer */
@@ -156,12 +219,6 @@ void NESAPU_StepClock(NESAPU *This)
 #undef IS_HALF_CLK
 }
 
-void NESAPU_Reset(NESAPU *This)
-{
-    This->ElapsedTime = 0;
-    This->Pulse1.Enable = false;
-    This->Pulse2.Enable = false;
-}
 
 u8 NESAPU_ExternalRead(NESAPU *This, u16 Address)
 {
@@ -196,9 +253,12 @@ void NESAPU_ExternalWrite(NESAPU *This, u16 Address, u8 Byte)
     {
         This->Pulse1.DutyCycle = DutyCycleLookup[Byte >> 6];
         This->Pulse1.Looping = Byte & 0x20;
+        This->Pulse1.ConstantVolume = Byte & 0x10;
+        This->Pulse1.Volume = Byte & 0x0F;
     } break;
     case 0x4001:
     {
+        This->Pulse1.DividerPeriodReload = (Byte >> 4) & 0x7;
     } break;
     case 0x4002:
     {
@@ -208,16 +268,22 @@ void NESAPU_ExternalWrite(NESAPU *This, u16 Address, u8 Byte)
     {
         MASKED_LOAD(This->Pulse1.Reload, (u16)Byte << 8, 0x0700);
         This->Pulse1.Timer = This->Pulse1.Reload;
-        This->Pulse1.LengthCounter = This->LengthCounterTable[Byte >> 3];
+        This->Pulse1.Start = true;
     } break;
+
 
     /* pulse 2 */
     case 0x4004:
     {
         This->Pulse2.DutyCycle = DutyCycleLookup[Byte >> 6];
         This->Pulse2.Looping = Byte & 0x20;
+        This->Pulse2.ConstantVolume = Byte & 0x10;
+        This->Pulse2.Volume = Byte & 0x0F;
     } break;
     case 0x4005:
+    {
+        This->Pulse2.DividerPeriodReload = (Byte >> 4) & 0x7;
+    } break;
     case 0x4006:
     {
         MASKED_LOAD(This->Pulse2.Reload, Byte, 0x00FF);
@@ -227,37 +293,46 @@ void NESAPU_ExternalWrite(NESAPU *This, u16 Address, u8 Byte)
         MASKED_LOAD(This->Pulse2.Reload, (u16)Byte << 8, 0x0700);
         This->Pulse2.Timer = This->Pulse2.Reload;
         This->Pulse2.LengthCounter = This->LengthCounterTable[Byte >> 3];
+        This->Pulse2.Start = true;
     } break;
+
 
     /* triangle */
     case 0x4008:
     {
-        This->Triangle.Looping = Byte & 0x80;
+        This->Triangle.Ctrl = Byte & 0x80;
+        This->Triangle.CounterReload = Byte & 0x7F;
     } break;
     case 0x4009: break; /* unused */
     case 0x400A:
     {
-        MASKED_LOAD(This->Triangle.Reload, Byte, 0x00FF);
+        MASKED_LOAD(This->Triangle.TimerReload, Byte, 0x00FF);
     } break;
     case 0x400B:
     {
-        MASKED_LOAD(This->Triangle.Reload, (u16)Byte << 8, 0x0700);
-        This->Triangle.Timer = This->Triangle.Reload;
-        This->Triangle.LengthCounter = This->LengthCounterTable[Byte >> 3];
+        MASKED_LOAD(This->Triangle.TimerReload, (u16)Byte << 8, 0x0700);
+        This->Triangle.Timer = This->Triangle.TimerReload;
+        This->Triangle.CounterReloadFlag = true;
     } break;
+
+
     /* noise */
     case 0x400C:
     {
         This->Noise.Looping = Byte & 0x20;
+        This->Noise.ConstantVolume = Byte & 0x10;
+        This->Noise.Volume = Byte & 0x0F;
     } break;
     case 0x400D: break; /* unused */
     case 0x400E:
     {
-        This->Noise.Looping = Byte & 0x20;
+        This->Noise.DividerPeriodReload = This->NTSCNoisePeriodTable[Byte & 0x0F];
     } break;
     case 0x400F:
     {
         This->Noise.LengthCounter = This->LengthCounterTable[Byte >> 3];
+        This->Noise.NoiseModeFlag = Byte >> 7;
+        This->Noise.Start = true;
     } break;
     /* DMC */
     case 0x4010:
