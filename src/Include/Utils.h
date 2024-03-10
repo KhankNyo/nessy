@@ -91,8 +91,11 @@ Benchmark:
     interestingly, the 32 bit float versions are slower than the 64 bit ones, 
     probably because of the implicit conversions from double to float at the function call site
 */
-float Sin32(float t);
-double Sin64(double t);
+double Sin64(double x);
+/* like Sin64, but has a period of 0..1 instead of 0..2pi */
+double Sint64(double t);
+
+u32 Rand(u32 *SeedAndState);
 
 #endif /* UTILS_H */
 

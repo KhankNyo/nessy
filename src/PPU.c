@@ -630,10 +630,10 @@ void NESPPU_ReloadBackgroundShifters(NESPPU *This)
 static void NESPPU_RenderSinglePixel(NESPPU *This)
 {
     Bool8 ShouldRenderBackground = (This->Mask & PPUMASK_SHOW_BG) != 0;
-    if (!(This->Mask & PPUMASK_SHOW_BG_LEFT) && This->Clk < 8)
+    if (!(This->Mask & PPUMASK_SHOW_BG_LEFT) && This->Clk <= 8)
         ShouldRenderBackground = false;
     Bool8 ShouldRenderForeground = (This->Mask & PPUMASK_SHOW_SPR) != 0;
-    if (!(This->Mask & PPUMASK_SHOW_SPR_LEFT) && This->Clk < 8)
+    if (!(This->Mask & PPUMASK_SHOW_SPR_LEFT) && This->Clk <= 8)
         ShouldRenderForeground = false;
     /* get background pixel values from shift registers */
     u8 BackgroundPixel = 0;
@@ -696,8 +696,7 @@ static void NESPPU_RenderSinglePixel(NESPPU *This)
     {
         uint LowerBound = (This->Mask & (PPUMASK_SHOW_SPR_LEFT | PPUMASK_SHOW_BG_LEFT))?
             1 : 9;
-        if (RenderingSpr0 && IN_RANGE(LowerBound, This->Clk, 257)
-        && ShouldRenderBackground && ShouldRenderForeground)
+        if (RenderingSpr0 && IN_RANGE(LowerBound, This->Clk, 256) && ShouldRenderForeground && ShouldRenderBackground)
         {
             This->Status |= PPUSTATUS_SPR0_HIT;
         }
@@ -896,10 +895,10 @@ Bool8 NESPPU_StepClock(NESPPU *This)
 
 
     uint ShouldRenderBackground = This->Mask & PPUMASK_SHOW_BG;
-    if (!(This->Mask & PPUMASK_SHOW_BG_LEFT) && This->Clk < 8)
+    if (!(This->Mask & PPUMASK_SHOW_BG_LEFT) && This->Clk <= 8)
         ShouldRenderBackground = false;
     uint ShouldRenderForeground = This->Mask & PPUMASK_SHOW_SPR;
-    if (!(This->Mask & PPUMASK_SHOW_SPR_LEFT) && This->Clk < 8)
+    if (!(This->Mask & PPUMASK_SHOW_SPR_LEFT) && This->Clk <= 8)
         ShouldRenderBackground = false;
     uint ShouldRender = ShouldRenderBackground || ShouldRenderForeground;
 
@@ -997,7 +996,7 @@ Bool8 NESPPU_StepClock(NESPPU *This)
 
 
         /* ================= foreground ================= */
-        if (ShouldRender)
+        if (ShouldRenderForeground)
         {
             /* SPRITE EVALUATION: evaluate sprite at the end of each visible frame */
             if (This->Scanline >= 0 && This->Clk == 257)
@@ -1007,8 +1006,7 @@ Bool8 NESPPU_StepClock(NESPPU *This)
                 This->VisibleSpriteCount = 0;
 
                 This->Spr0IsVisible = false;
-                uint i = 0;
-                while (i < STATIC_ARRAY_SIZE(This->OAM.Entries) && This->VisibleSpriteCount < 9)
+                for (uint i = 0; i < STATIC_ARRAY_SIZE(This->OAM.Entries) && This->VisibleSpriteCount < 9; i++)
                 {
                     int ScanlineDiff = This->Scanline - This->OAM.Entries[i].y;
                     int SpriteHeight = This->Ctrl & PPUCTRL_SPR_SIZE16? 16 : 8;
@@ -1022,7 +1020,6 @@ Bool8 NESPPU_StepClock(NESPPU *This)
                         }
                         This->VisibleSpriteCount++;
                     }
-                    i++;
                 }
                 if (This->VisibleSpriteCount > 8)
                 {

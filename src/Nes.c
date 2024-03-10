@@ -392,7 +392,7 @@ Platform_AudioConfig Nes_OnEntry(Platform_ThreadContext ThreadContext)
     u32 AudioSampleRate = 48000;
     Emulator *Emu = ThreadContext.ViewPtr;
 
-    Emu->MasterClkPerAudioSample = NES_MASTER_CLK / 44100;
+    Emu->MasterClkPerAudioSample = NES_MASTER_CLK / AudioSampleRate;
     Emu->BackBuffer = &Emu->ScreenBuffer[0];
     Emu->FrontBuffer = &Emu->ScreenBuffer[1];
     Emu->EmulationDone = false;
@@ -414,6 +414,7 @@ Platform_AudioConfig Nes_OnEntry(Platform_ThreadContext ThreadContext)
         &Emu->Nes.Cartridge
     );
     Emu->Nes.APU = NESAPU_Init(
+        Platform_GetTimeMillisec()
     );
     Emu->DisassemblerState = (NESDisassemblerState) {
         .Count = 16,
@@ -425,8 +426,10 @@ Platform_AudioConfig Nes_OnEntry(Platform_ThreadContext ThreadContext)
         .EnableAudio = true,
         .SampleRate = AudioSampleRate,
         .ChannelCount = AudioChannelCount, 
-        .BufferSizeBytes = 1024 * AudioChannelCount * sizeof(int16_t),
+        .BufferSizeBytes = AudioSampleRate * AudioChannelCount * sizeof(int16_t),
     };
+
+    
     return AudioConfig;
 }
 
@@ -489,7 +492,7 @@ int16_t Nes_OnAudioSampleRequest(Platform_ThreadContext ThreadContext, double t)
 
     if (!Emu->EmulationHalted)
     {
-        for (u32 i = 0; i < Emu->MasterClkPerAudioSample; i++)
+        for (u32 i = 0; i <= Emu->MasterClkPerAudioSample; i++)
         {
             Nes_StepClock(Nes);
         }

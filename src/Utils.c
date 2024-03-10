@@ -195,20 +195,19 @@ double Sin64(double x)
     return y;
 }
 
-
-float Sin32(float x) 
-{
-    float t = x * (float)(1.0f / TAU); /* this better get eval at comptime */
+double Sint64(double t) 
+{                                                                             
     t -= (i64)t;
     Bool8 ShouldBeNegated = t >= .5;
     if (ShouldBeNegated)
         t -= .5;
     t = t*TAU - PI/2;
                                                                                     
-    float t2 = t*t;
-    float y = 1
-        - t2 * (float)INV_2_FACTORIAL
-        + t2*t2 * (float)(MAGIC / 24.0f); 
+    /* calculate result  */
+    double t2 = t*t;
+    double y = 1
+        - t2 * 0.5
+        + t2*t2 * (double)(MAGIC / 24.0f); 
     if (ShouldBeNegated)
         return -y;
     return y;
@@ -217,6 +216,15 @@ float Sin32(float x)
 
 #undef MAGIC
 #undef INV_2_FACTORIAL
+
+
+u32 Rand(u32 *State)
+{
+    *State = *State * 747796405u + 2891336453u;
+    u32 state = *State;
+    u32 word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
 
 
 
