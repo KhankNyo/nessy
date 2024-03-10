@@ -69,11 +69,10 @@ static double NESAPU_SequencerGenerateSquareSample(Sequencer *Seq, double t, int
         double Frequency = NES_CPU_CLK / (16.0 * (double)(Seq->Timer + 1));
         Sample = VariableDutySquareWave(Frequency*t, Seq->DutyCycle, HarmonicCount);
         if (!Seq->Looping)
-        {
             Seq->LengthCounter--;
-        }
+        if (0 == Seq->LengthCounter)
+            Seq->Enable = false;
     }
-    else Seq->Enable = false;
 
     return Sample;
 }
@@ -93,11 +92,10 @@ static double NESAPU_SequencerGenerateTriangleSample(Sequencer *Seq, double t, i
         Sample *= (2.0 / PI);
 
         if (!Seq->Looping)
-        {
             Seq->LengthCounter--;
-        }
+        if (0 == Seq->LengthCounter)
+            Seq->Enable = false;
     }
-    else Seq->Enable = false;
     return Sample;
 }
 
@@ -139,7 +137,7 @@ void NESAPU_StepClock(NESAPU *This)
         double Pulse1 = NESAPU_SequencerGenerateSquareSample(&This->Pulse1, This->ElapsedTime, 20);
         double Pulse2 = NESAPU_SequencerGenerateSquareSample(&This->Pulse2, This->ElapsedTime, 20);
         double Triangle = NESAPU_SequencerGenerateTriangleSample(&This->Triangle, This->ElapsedTime, 20);
-        double Noise = NESAPU_SequencerGenerateNoiseSample(&This->Noise, &This->RandSeed);
+        double Noise = 0;//NESAPU_SequencerGenerateNoiseSample(&This->Noise, &This->RandSeed);
         double DMC = 0;
 
         /* sound mixer */
