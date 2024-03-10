@@ -47,6 +47,12 @@ typedef struct Win32_Audio
     HANDLE ThreadHandle;
 } Win32_Audio;
 
+typedef struct Win32_BufferData 
+{
+    void *ViewPtr;
+    isize SizeBytes;
+} Win32_BufferData;
+
 
 
 static struct {
@@ -67,7 +73,7 @@ static double sWin32_FontSize = -16.;
 static double sWin32_TimerFrequency;
 static Nes_DisplayableStatus sWin32_DisplayableStatus;
 static Platform_FrameBuffer sWin32_FrameBuffer;
-static BufferData sWin32_StaticBuffer;
+static Platform_ThreadContext sWin32_ThreadContext;
 
 static volatile Win32_Audio sWin32_Audio = { 0 };
 
@@ -321,7 +327,7 @@ static OPENFILENAMEA Win32_CreateFileSelectionPrompt(DWORD PromptFlags)
 }
 
 
-static BufferData Win32_ReadFileSync(const char *FileName, DWORD dwCreationDisposition)
+static Win32_BufferData Win32_ReadFileSync(const char *FileName, DWORD dwCreationDisposition)
 {
     HANDLE FileHandle = OPEN_FILE(FileName, GENERIC_READ, dwCreationDisposition, 0);
     if (INVALID_HANDLE_VALUE == FileHandle)
@@ -341,7 +347,7 @@ static BufferData Win32_ReadFileSync(const char *FileName, DWORD dwCreationDispo
         goto ReadFileFailed;
 
     CloseHandle(FileHandle);
-    return (BufferData){
+    return (Win32_BufferData){
         .ViewPtr = Buffer,
         .SizeBytes = FileBufferSize
     };
@@ -353,7 +359,7 @@ GetFileSizeFailed:
     CloseHandle(FileHandle);
 CreateFileFailed:
     Win32_SystemError("Unable to open file");
-    return (BufferData) { 0 };
+    return (Win32_BufferData) { 0 };
 }
 
 
@@ -589,23 +595,23 @@ static LRESULT CALLBACK Win32_MainWndProc(HWND Window, UINT Msg, WPARAM WParam, 
         {
         case 'H':
         {
-            Nes_OnEmulatorToggleHalt(sWin32_StaticBuffer);
+            Nes_OnEmulatorToggleHalt(sWin32_ThreadContext);
         } break;
         case 'R':
         {
-            Nes_OnEmulatorReset(sWin32_StaticBuffer);
+            Nes_OnEmulatorReset(sWin32_ThreadContext);
         } break;
         case 'F':
         {
-            Nes_OnEmulatorSingleFrame(sWin32_StaticBuffer);
+            Nes_OnEmulatorSingleFrame(sWin32_ThreadContext);
         } break;
         case 'P':
         {
-            Nes_OnEmulatorTogglePalette(sWin32_StaticBuffer);
+            Nes_OnEmulatorTogglePalette(sWin32_ThreadContext);
         } break;
         case VK_SPACE:
         {
-            Nes_OnEmulatorSingleStep(sWin32_StaticBuffer);
+            Nes_OnEmulatorSingleStep(sWin32_ThreadContext);
         } break;
         }
     } break;
@@ -618,11 +624,11 @@ static LRESULT CALLBACK Win32_MainWndProc(HWND Window, UINT Msg, WPARAM WParam, 
             OPENFILENAMEA Prompt = Win32_CreateFileSelectionPrompt(0);
             if (GetOpenFileNameA(&Prompt))
             {
-                BufferData Buffer = Win32_ReadFileSync(Prompt.lpstrFile, OPEN_EXISTING);
+                Win32_BufferData Buffer = Win32_ReadFileSync(Prompt.lpstrFile, OPEN_EXISTING);
                 if (Buffer.ViewPtr)
                 {
                     const char *ErrorMessage = Nes_ParseINESFile(
-                        sWin32_StaticBuffer,
+                        sWin32_ThreadContext,
                         Buffer.ViewPtr, 
                         Buffer.SizeBytes
                     );
@@ -658,8 +664,8 @@ static Bool8 Win32_PollInputs(void)
 static void Win32_UpdateWindowTimer(HWND Window, UINT DontCare, UINT_PTR DontCare2, DWORD DontCare3)
 {
     (void)Window, (void)DontCare, (void)DontCare2, (void)DontCare3;
-    sWin32_DisplayableStatus = Nes_PlatformQueryDisplayableStatus(sWin32_StaticBuffer);
-    sWin32_FrameBuffer = Nes_PlatformQueryFrameBuffer(sWin32_StaticBuffer);
+    sWin32_DisplayableStatus = Nes_PlatformQueryDisplayableStatus(sWin32_ThreadContext);
+    sWin32_FrameBuffer = Nes_PlatformQueryFrameBuffer(sWin32_ThreadContext);
 
     InvalidateRect(sWin32_Gui.StatusWindow, NULL, FALSE);
     InvalidateRect(sWin32_Gui.GameWindow, NULL, FALSE);
@@ -670,23 +676,11 @@ static void Win32_UpdateWindowTimer(HWND Window, UINT DontCare, UINT_PTR DontCar
 
 
 
-static double Win32_PulseWave(double t)
-{
-    double y = 0;
-    for (int i = 1; i <= 20; i++)
-    {
-        y += Sin64(t*i) / (double)i;
-    }
-    return y;
-}
-
-
 static DWORD Win32_AudioThread(void *UserData)
 {
     (void)UserData;
     double t = 0;
-    double Hz = 440;
-    double dt = Hz * 2 * 3.14159 / sWin32_Audio.Config.SampleRate;
+    double dt = 1.0 / sWin32_Audio.Config.SampleRate;
     sWin32_Audio.ThreadTerminated = false;
     IAudioClient_Start(sWin32_Audio.Client);
 
@@ -694,46 +688,43 @@ static DWORD Win32_AudioThread(void *UserData)
     {
         DWORD WaitResult = WaitForSingleObject(sWin32_Audio.BufferRefillEvent, INFINITE);
         if (WAIT_OBJECT_0 != WaitResult)
-            break;
+            goto AudioFailed;
 
-        UINT32 UnreadFrames;
+        u32 UnreadFrames;
         HRESULT hr = IAudioClient_GetCurrentPadding(sWin32_Audio.Client, &UnreadFrames);
         if (FAILED(hr))
-        {
-        }
+            goto AudioFailed;
 
         UINT32 FramesToWrite = sWin32_Audio.BufferSizeFrame - UnreadFrames;
         BYTE *Buffer;
         hr = IAudioRenderClient_GetBuffer(sWin32_Audio.Renderer, FramesToWrite, &Buffer);
         if (FAILED(hr))
-        {
-        }
+            goto AudioFailed;
 
         int16_t *DataPtr = (int16_t *)Buffer;
-        for (UINT32 f = 0; f < FramesToWrite; f++)
+        for (u32 f = 0; f < FramesToWrite; f++)
         {
-            double SoundSample = sWin32_Audio.Config.Volume * Win32_PulseWave(t);
+            int16_t AudioSample = Nes_OnAudioSampleRequest(sWin32_ThreadContext, t);
             t += dt;
-
-            int16_t SoundData = (int16_t)SoundSample;
-            if (SoundSample >= INT16_MAX)
-                SoundData = INT16_MAX;
-            else if (SoundSample <= (double)INT16_MIN)
-                SoundData = INT16_MIN;
-
-            for (UINT32 c = 0; c < sWin32_Audio.Config.ChannelCount; c++)
+            for (u32 c = 0; c < sWin32_Audio.Config.ChannelCount; c++)
             {
-                *DataPtr++ = SoundData;
+                *DataPtr++ = AudioSample;
             }
         }
 
+
         hr = IAudioRenderClient_ReleaseBuffer(sWin32_Audio.Renderer, FramesToWrite, 0);
         if (FAILED(hr))
-        {
-        }
+            goto AudioFailed;
     }
     IAudioClient_Stop(sWin32_Audio.Client);
     sWin32_Audio.ThreadTerminated = true;
+    return 0;
+
+AudioFailed:
+    IAudioClient_Stop(sWin32_Audio.Client);
+    sWin32_Audio.ThreadTerminated = true;
+    Nes_OnAudioFailed(sWin32_ThreadContext);
     return 0;
 }
 
@@ -759,7 +750,7 @@ static Bool8 Win32_InitializeAudio(Platform_AudioConfig Config, int BitsPerSampl
 #define SEC_TO_100NS(sec) (sec)*10000000
 
     int FrameSize = Config.ChannelCount * BitsPerSample / 8;
-    sWin32_Audio = (Win32_Audio) {
+    Win32_Audio Audio = {
         .Config = Config,
         .Format = {
             .cbSize = 0,
@@ -768,7 +759,7 @@ static Bool8 Win32_InitializeAudio(Platform_AudioConfig Config, int BitsPerSampl
             .nBlockAlign = FrameSize,
             .wBitsPerSample = BitsPerSample, 
             .nSamplesPerSec = Config.SampleRate, 
-            .nAvgBytesPerSec = Config.SampleRate * BitsPerSample / 8,
+            .nAvgBytesPerSec = Config.SampleRate * FrameSize,
         },
     };
     HRESULT hr;
@@ -789,7 +780,7 @@ static Bool8 Win32_InitializeAudio(Platform_AudioConfig Config, int BitsPerSampl
             DeviceEnumerator, 
             eRender, 
             eMultimedia, 
-            &sWin32_Audio.Device
+            &Audio.Device
         );
         if (FAILED(hr)) 
             return false;
@@ -799,11 +790,11 @@ static Bool8 Win32_InitializeAudio(Platform_AudioConfig Config, int BitsPerSampl
 
     /* audio client bs */
     hr = IMMDevice_Activate(
-        sWin32_Audio.Device,
+        Audio.Device,
         &s_IID_IAudioClient, 
         CLSCTX_INPROC_SERVER, 
         NULL, 
-        (void **)&sWin32_Audio.Client
+        (void **)&Audio.Client
     );
     if (FAILED(hr)) 
         return false;
@@ -812,56 +803,56 @@ static Bool8 Win32_InitializeAudio(Platform_AudioConfig Config, int BitsPerSampl
     /* setup sound sample */
     REFERENCE_TIME BufferDuration100ns = SEC_TO_100NS(Config.BufferSizeBytes) / Config.SampleRate;
     hr = IAudioClient_Initialize(
-        sWin32_Audio.Client, 
+        Audio.Client, 
         AUDCLNT_SHAREMODE_SHARED,   
         AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 
         BufferDuration100ns, 
         0, 
-        &sWin32_Audio.Format, 
+        &Audio.Format, 
         NULL
     );
     if (FAILED(hr)) 
         return false;
 
     /* create an event handler to fill the buffer when needed */
-    sWin32_Audio.BufferRefillEvent = CreateEventExA(NULL, NULL, 0, SYNCHRONIZE | EVENT_MODIFY_STATE);
-    if (sWin32_Audio.BufferRefillEvent == NULL 
-    || sWin32_Audio.BufferRefillEvent == INVALID_HANDLE_VALUE) 
+    Audio.BufferRefillEvent = CreateEventExA(NULL, NULL, 0, SYNCHRONIZE | EVENT_MODIFY_STATE);
+    if (Audio.BufferRefillEvent == NULL 
+    || Audio.BufferRefillEvent == INVALID_HANDLE_VALUE) 
         return false;
 
     /* set the event */
-    hr = IAudioClient_SetEventHandle(sWin32_Audio.Client, sWin32_Audio.BufferRefillEvent);
+    hr = IAudioClient_SetEventHandle(Audio.Client, Audio.BufferRefillEvent);
     if (FAILED(hr)) 
         return false;
 
 
     /* get the audio render service */
-    hr = IAudioClient_GetService(sWin32_Audio.Client, &s_IID_IAudioRenderClient, (void**)&sWin32_Audio.Renderer);
+    hr = IAudioClient_GetService(Audio.Client, &s_IID_IAudioRenderClient, (void**)&Audio.Renderer);
     if (FAILED(hr)) 
         return false;
 
 
     /* get the buffer size (in frame count: channel * sampleSizeBytes) */
-    hr = IAudioClient_GetBufferSize(sWin32_Audio.Client, &sWin32_Audio.BufferSizeFrame);
+    hr = IAudioClient_GetBufferSize(Audio.Client, &Audio.BufferSizeFrame);
     if (FAILED(hr)) 
         return false;
 
     {
         BYTE* Tmp;
-        hr = IAudioRenderClient_GetBuffer(sWin32_Audio.Renderer, sWin32_Audio.BufferSizeFrame, &Tmp);
+        hr = IAudioRenderClient_GetBuffer(Audio.Renderer, Audio.BufferSizeFrame, &Tmp);
         if (FAILED(hr)) 
             return false;
 
         /* clear the buffer to 0 */
-        hr = IAudioRenderClient_ReleaseBuffer(sWin32_Audio.Renderer, sWin32_Audio.BufferSizeFrame, AUDCLNT_BUFFERFLAGS_SILENT);
+        hr = IAudioRenderClient_ReleaseBuffer(Audio.Renderer, Audio.BufferSizeFrame, AUDCLNT_BUFFERFLAGS_SILENT);
         if (FAILED(hr)) 
             return false;
     }
 
     /* create audio thread */
-    sWin32_Audio.ThreadShouldStop = false;
-    sWin32_Audio.ThreadTerminated = true;
-    sWin32_Audio.ThreadHandle = CreateThread(
+    Audio.ThreadShouldStop = false;
+    Audio.ThreadTerminated = true;
+    Audio.ThreadHandle = CreateThread(
         NULL, 
         0, 
         Win32_AudioThread, 
@@ -869,11 +860,12 @@ static Bool8 Win32_InitializeAudio(Platform_AudioConfig Config, int BitsPerSampl
         0, 
         NULL
     );
-    if (NULL == sWin32_Audio.ThreadHandle)
+    if (NULL == Audio.ThreadHandle)
     {
         return false;
     }
 
+    sWin32_Audio = Audio;
     return true;
 
 #undef SEC_TO_100NS
@@ -935,22 +927,22 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
 
     /* ask the game for the static buffer size, and then */
     /* allocate game memory up front, the platform owns it */
-    sWin32_StaticBuffer.SizeBytes = Nes_RequestStaticBufferSize();
-    sWin32_StaticBuffer.ViewPtr = Win32_AllocateMemory(sWin32_StaticBuffer.SizeBytes);
-    if (NULL == sWin32_StaticBuffer.ViewPtr)
+    sWin32_ThreadContext.SizeBytes = Nes_PlatformQueryThreadContextSize();
+    sWin32_ThreadContext.ViewPtr = Win32_AllocateMemory(sWin32_ThreadContext.SizeBytes);
+    if (NULL == sWin32_ThreadContext.ViewPtr)
     {
         Win32_Fatal("Out of memory");
     }
 
 
     /* call the emulator's entry point */
-    Platform_AudioConfig AudioConfig = Nes_OnEntry(sWin32_StaticBuffer);
+    Platform_AudioConfig AudioConfig = Nes_OnEntry(sWin32_ThreadContext);
     if (AudioConfig.EnableAudio)
     {
         Bool8 AudioInitOk = Win32_InitializeAudio(AudioConfig, 16);
         if (!AudioInitOk)
         {
-            Nes_OnAudioFailed(sWin32_StaticBuffer);
+            Nes_OnAudioFailed(sWin32_ThreadContext);
             Win32_ErrorBox("Unable to initialize audio.");
         }
     }
@@ -961,24 +953,25 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
     while (Win32_PollInputs())
     {
         double Now = Platform_GetTimeMillisec();
-        Nes_OnLoop(sWin32_StaticBuffer, Now - TimeOrigin);
+        Nes_OnLoop(sWin32_ThreadContext, Now - TimeOrigin);
     }
 
 
-    /* exiting */
-    Nes_AtExit(sWin32_StaticBuffer);
 
 
     /* don't need to clean up the window, windows does it faster than us */
     (void)sWin32_Gui.MainWindow;
     /* don't need to free the memory, windows does it faster than us */
-    (void)sWin32_StaticBuffer;
+    (void)sWin32_ThreadContext;
 
     /* but we do need to cleanup audio devices */
     if (AudioConfig.EnableAudio)
     {
         Win32_DestroyAudio();
     }
+
+    /* exiting */
+    Nes_AtExit(sWin32_ThreadContext);
 
 
     /* gracefully exits */
@@ -993,18 +986,16 @@ double Platform_GetTimeMillisec(void)
     return (double)Now.QuadPart * sWin32_TimerFrequency;
 }
 
-/* TODO: the GetKeyState function gets the physical state of the keyboard at any given moment, 
- * but we only care about the state of the keyboard when the game window is being focused */
 Nes_ControllerStatus Platform_GetControllerState(void)
 {
-    u16 Left = GetKeyState('A') < 0 || GetKeyState(VK_LEFT) < 0; 
-    u16 Right = GetKeyState('D') < 0 || GetKeyState(VK_RIGHT) < 0;
-    u16 Up = GetKeyState('W') < 0 || GetKeyState(VK_UP) < 0;
-    u16 Down = GetKeyState('S') < 0 || GetKeyState(VK_DOWN) < 0;
-    u16 Start = GetKeyState(VK_RETURN) < 0;
-    u16 Select = GetKeyState(VK_TAB) < 0;
-    u16 A = GetKeyState('K') < 0;
-    u16 B = GetKeyState('J') < 0;
+    u16 Left = GetAsyncKeyState('A') < 0 || GetAsyncKeyState(VK_LEFT) < 0; 
+    u16 Right = GetAsyncKeyState('D') < 0 || GetAsyncKeyState(VK_RIGHT) < 0;
+    u16 Up = GetAsyncKeyState('W') < 0 || GetAsyncKeyState(VK_UP) < 0;
+    u16 Down = GetAsyncKeyState('S') < 0 || GetAsyncKeyState(VK_DOWN) < 0;
+    u16 Start = GetAsyncKeyState(VK_RETURN) < 0;
+    u16 Select = GetAsyncKeyState(VK_TAB) < 0;
+    u16 A = GetAsyncKeyState('K') < 0;
+    u16 B = GetAsyncKeyState('J') < 0;
 
     Nes_ControllerStatus ControllerStatus = 
         (A << 0)

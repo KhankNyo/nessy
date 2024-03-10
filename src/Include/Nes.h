@@ -3,9 +3,11 @@
 
 #include "Common.h"
 
+#define NES_CPU_CLK 1789773
+#define NES_PPU_CLK NES_CPU_CLK*3
+#define NES_MASTER_CLK NES_PPU_CLK
+
 #define NES_CPU_RAM_SIZE 0x0800
-#define NES_MASTER_CLK 21477272
-#define NES_CPU_CLK 21441960
 #define NES_SCREEN_HEIGHT 240
 #define NES_SCREEN_WIDTH 256
 #define NES_SCREEN_BUFFER_SIZE (NES_SCREEN_WIDTH * NES_SCREEN_HEIGHT)
@@ -22,9 +24,14 @@ typedef struct Platform_AudioConfig
     u32 SampleRate;
     u32 ChannelCount;
     u32 BufferSizeBytes;
-    u32 Volume;
     Bool8 EnableAudio;
 } Platform_AudioConfig;
+
+typedef struct Platform_ThreadContext 
+{
+    void *ViewPtr;
+    isize SizeBytes;
+} Platform_ThreadContext;
 
 typedef struct Platform_FrameBuffer 
 {
@@ -56,12 +63,12 @@ typedef u16 Nes_ControllerStatus;
  * so pointers to locations inside the memory buffer can be cached */
 /* if the platform was unable to provide a suitable buffer, all Nes_* functions will never be called */
 /* the memory given to Nes_OnEntry is guaranteed to be initialized with zero */
-isize Nes_PlatformQueryStaticBufferSize(void);
+isize Nes_PlatformQueryThreadContextSize(void);
 
 /* these functions can happen at any time (if Nes_PlatformQueryStaticBufferSize succeeds) */
-Platform_FrameBuffer Nes_PlatformQueryFrameBuffer(BufferData StaticBuffer);
-void Nes_OnAudioFailed(BufferData StaticBuffer);
-Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(BufferData StaticBuffer);
+Platform_FrameBuffer Nes_PlatformQueryFrameBuffer(Platform_ThreadContext ThreadContext);
+void Nes_OnAudioFailed(Platform_ThreadContext ThreadContext);
+Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(Platform_ThreadContext ThreadContext);
 
 
 /* functions for the emulator to request information from the platform */
@@ -73,18 +80,19 @@ Nes_ControllerStatus Platform_GetControllerState(void);
 /* NOTE: Nes_OnEntry and the rest of the functions below it are 
  * only called when the platform was able to create a buffer that has 
  * the size requested by Nes_PlatformQueryStaticBufferSize */
-Platform_AudioConfig Nes_OnEntry(BufferData StaticBuffer);
-void Nes_OnAudioInitializationFailed(BufferData StaticBuffer);
-void Nes_OnLoop(BufferData StaticBuffer, double ElapsedTime);
-void Nes_AtExit(BufferData StaticBuffer);
-/* event handlers */
-void Nes_OnEmulatorToggleHalt(BufferData StaticBuffer);
-void Nes_OnEmulatorTogglePalette(BufferData StaticBuffer);
-void Nes_OnEmulatorReset(BufferData StaticBuffer);
-void Nes_OnEmulatorSingleStep(BufferData StaticBuffer);
-void Nes_OnEmulatorSingleFrame(BufferData StaticBuffer);
+Platform_AudioConfig Nes_OnEntry(Platform_ThreadContext ThreadContext);
+void Nes_OnLoop(Platform_ThreadContext ThreadContext, double ElapsedTime);
+void Nes_AtExit(Platform_ThreadContext ThreadContext);
+/* event handlers (can be called at any time after Nes_OnEntry)  */
+void Nes_OnAudioInitializationFailed(Platform_ThreadContext ThreadContext);
+int16_t Nes_OnAudioSampleRequest(Platform_ThreadContext ThreadContext, double t);
+void Nes_OnEmulatorToggleHalt(Platform_ThreadContext ThreadContext);
+void Nes_OnEmulatorTogglePalette(Platform_ThreadContext ThreadContext);
+void Nes_OnEmulatorReset(Platform_ThreadContext ThreadContext);
+void Nes_OnEmulatorSingleStep(Platform_ThreadContext ThreadContext);
+void Nes_OnEmulatorSingleFrame(Platform_ThreadContext ThreadContext);
 /* returns NULL on success, or a static error string on failure (no lifetime) */
-const char *Nes_ParseINESFile(BufferData StaticBuffer, const void *FileBuffer, isize BufferSizeBytes);
+const char *Nes_ParseINESFile(Platform_ThreadContext ThreadContext, const void *FileBuffer, isize BufferSizeBytes);
 
 
 #endif /* NES_H */

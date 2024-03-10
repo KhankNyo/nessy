@@ -11,6 +11,7 @@
 #include "6502.c"
 #include "PPU.c"
 #include "Cartridge.c"
+#include "APU.c"
 
 
 typedef struct NES 
@@ -19,6 +20,7 @@ typedef struct NES
     u64 Clk;
     MC6502 CPU;
     NESPPU PPU;
+    NESAPU APU;
 
     Bool8 DMA; 
     Bool8 DMAOutOfSync;
@@ -51,6 +53,7 @@ typedef struct Emulator
     Bool8 EmulationHalted;
     Bool8 EmulationDone;
     double ResidueTime;
+    u32 MasterClkPerAudioSample;
 
     /* screen */
     u32 ScreenBuffer[2][NES_SCREEN_BUFFER_SIZE];
@@ -88,9 +91,11 @@ static void NesInternal_WriteByte(void *UserData, u16 Address, u8 Byte)
         Nes->DMA = true;
         Nes->DMAOutOfSync = true;
     }
-    /* IO registers: DMA */
-    else if (IN_RANGE(0x4000, Address, 0x401F))
+    /* APU */
+    else if (IN_RANGE(0x4000, Address, 0x4013) 
+    || Address == 0x4015 || Address == 0x4017)
     {
+        NESAPU_ExternalWrite(&Nes->APU, Address, Byte);
     }
     /* Expansion Rom */
     else if (IN_RANGE(0x4020, Address, 0x5FFF))
@@ -130,6 +135,7 @@ static u8 NesInternal_ReadByte(void *UserData, u16 Address)
     /* IO registers: DMA */
     else if (IN_RANGE(0x4000, Address, 0x401F))
     {
+        return NESAPU_ExternalRead(&Nes->APU, Address);
     }
     /* Expansion Rom */
     else if (IN_RANGE(0x4020, Address, 0x5FFF))
@@ -166,7 +172,7 @@ static void Nes_ConnectCartridge(Emulator *Emu, NESCartridge NewCartridge)
 }
 
 
-const char *Nes_ParseINESFile(BufferData StaticBuffer, const void *INESFile, isize FileSize)
+const char *Nes_ParseINESFile(Platform_ThreadContext ThreadContext, const void *INESFile, isize FileSize)
 {
     /* 
      * refer to this before reading 
@@ -272,7 +278,7 @@ const char *Nes_ParseINESFile(BufferData StaticBuffer, const void *INESFile, isi
     }
 
 
-    Emulator *Emu = StaticBuffer.ViewPtr;
+    Emulator *Emu = ThreadContext.ViewPtr;
     NESCartridge Cartridge = NESCartridge_Init(
         FilePrgRom, PrgRomSize, 
         FileChrRom, ChrRomSize, 
@@ -297,9 +303,9 @@ ErrorFileTooSmall:
 }
 
 
-Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(BufferData StaticBuffer)
+Nes_DisplayableStatus Nes_PlatformQueryDisplayableStatus(Platform_ThreadContext ThreadContext)
 {
-    Emulator *Emu = StaticBuffer.ViewPtr;
+    Emulator *Emu = ThreadContext.ViewPtr;
     NES *Nes = &Emu->Nes;
 
     u16 StackValue = (u16)Nes->Ram[0x100 + (u8)(Nes->CPU.SP + 1)];
@@ -359,9 +365,9 @@ static void NesInternal_OnPPUNmi(void *UserData)
     MC6502_Interrupt(&Emu->Nes.CPU, VEC_NMI);
 }
 
-Platform_FrameBuffer Nes_PlatformQueryFrameBuffer(BufferData StaticBuffer)
+Platform_FrameBuffer Nes_PlatformQueryFrameBuffer(Platform_ThreadContext ThreadContext)
 {
-    Emulator *Emu = StaticBuffer.ViewPtr;
+    Emulator *Emu = ThreadContext.ViewPtr;
     Platform_FrameBuffer Frame = {
         .Data = Emu->FrontBuffer,
         .Width = NES_SCREEN_WIDTH,
@@ -373,19 +379,20 @@ Platform_FrameBuffer Nes_PlatformQueryFrameBuffer(BufferData StaticBuffer)
 
 
 
-isize Nes_RequestStaticBufferSize(void)
+isize Nes_PlatformQueryThreadContextSize(void)
 {
     return sizeof(Emulator);
 }
 
-Platform_AudioConfig Nes_OnEntry(BufferData StaticBuffer)
+Platform_AudioConfig Nes_OnEntry(Platform_ThreadContext ThreadContext)
 {
-    DEBUG_ASSERT(StaticBuffer.ViewPtr);
-    DEBUG_ASSERT(StaticBuffer.SizeBytes == sizeof(Emulator));
+    DEBUG_ASSERT(ThreadContext.ViewPtr);
+    DEBUG_ASSERT(ThreadContext.SizeBytes == sizeof(Emulator));
 
+    u32 AudioSampleRate = 48000;
+    Emulator *Emu = ThreadContext.ViewPtr;
 
-    Emulator *Emu = StaticBuffer.ViewPtr;
-
+    Emu->MasterClkPerAudioSample = NES_MASTER_CLK / 44100;
     Emu->BackBuffer = &Emu->ScreenBuffer[0];
     Emu->FrontBuffer = &Emu->ScreenBuffer[1];
     Emu->EmulationDone = false;
@@ -406,6 +413,8 @@ Platform_AudioConfig Nes_OnEntry(BufferData StaticBuffer)
         *Emu->BackBuffer, 
         &Emu->Nes.Cartridge
     );
+    Emu->Nes.APU = NESAPU_Init(
+    );
     Emu->DisassemblerState = (NESDisassemblerState) {
         .Count = 16,
         .BytesPerLine = 3,
@@ -414,15 +423,14 @@ Platform_AudioConfig Nes_OnEntry(BufferData StaticBuffer)
     u32 AudioChannelCount = 1;
     Platform_AudioConfig AudioConfig = {
         .EnableAudio = true,
-        .SampleRate = 48000,
+        .SampleRate = AudioSampleRate,
         .ChannelCount = AudioChannelCount, 
         .BufferSizeBytes = 1024 * AudioChannelCount * sizeof(int16_t),
-        .Volume = 4000,
     };
     return AudioConfig;
 }
 
-void Nes_OnAudioFailed(BufferData StaticBuffer)
+void Nes_OnAudioFailed(Platform_ThreadContext ThreadContext)
 {
 }
 
@@ -431,6 +439,7 @@ void Nes_OnAudioFailed(BufferData StaticBuffer)
 static Bool8 Nes_StepClock(NES *Nes)
 {
     Nes->Clk++;
+    NESAPU_StepClock(&Nes->APU);
     Bool8 FrameCompleted = NESPPU_StepClock(&Nes->PPU);
     if (Nes->Clk % 3 == 0)
     {
@@ -473,12 +482,40 @@ static Bool8 Nes_StepClock(NES *Nes)
     return FrameCompleted;
 }
 
-
-void Nes_OnLoop(BufferData StaticBuffer, double ElapsedTime)
+int16_t Nes_OnAudioSampleRequest(Platform_ThreadContext ThreadContext, double t)
 {
-    Emulator *Emu = StaticBuffer.ViewPtr;
+    Emulator *Emu = ThreadContext.ViewPtr;
     NES *Nes = &Emu->Nes;
 
+    if (!Emu->EmulationHalted)
+    {
+        for (u32 i = 0; i < Emu->MasterClkPerAudioSample; i++)
+        {
+            Nes_StepClock(Nes);
+        }
+    }
+    else if (!Emu->EmulationDone)
+    {
+        Emu->EmulationDone = true;
+    }
+
+    double AudioSample = Nes->APU.AudioSample;
+    if (AudioSample >= INT16_MAX)
+        return INT16_MAX;
+    if (AudioSample <= INT16_MIN)
+        return INT16_MIN;
+    return (int16_t)AudioSample;
+}
+
+
+
+
+
+void Nes_OnLoop(Platform_ThreadContext ThreadContext, double ElapsedTime)
+{
+    return;
+    Emulator *Emu = ThreadContext.ViewPtr;
+    NES *Nes = &Emu->Nes;
     if (!Emu->EmulationHalted)
     {
         if (Emu->ResidueTime < ElapsedTime)
@@ -519,9 +556,9 @@ void Nes_OnLoop(BufferData StaticBuffer, double ElapsedTime)
     }
 }
 
-void Nes_AtExit(BufferData StaticBuffer)
+void Nes_AtExit(Platform_ThreadContext ThreadContext)
 {
-    Emulator *Emu = StaticBuffer.ViewPtr;
+    Emulator *Emu = ThreadContext.ViewPtr;
     if (Emu->Nes.Cartridge)
     {
         NESCartridge_Destroy(Emu->Nes.Cartridge);
@@ -531,38 +568,39 @@ void Nes_AtExit(BufferData StaticBuffer)
 
 
 
-void Nes_OnEmulatorToggleHalt(BufferData StaticBuffer)
+void Nes_OnEmulatorToggleHalt(Platform_ThreadContext ThreadContext)
 {
-    Emulator *Emu = StaticBuffer.ViewPtr;
+    Emulator *Emu = ThreadContext.ViewPtr;
     Emu->EmulationDone = true;
     Emu->EmulationHalted = !Emu->EmulationHalted;
 }
 
-void Nes_OnEmulatorSingleStep(BufferData StaticBuffer)
+void Nes_OnEmulatorSingleStep(Platform_ThreadContext ThreadContext)
 {
-    Emulator *Emu = StaticBuffer.ViewPtr;
+    Emulator *Emu = ThreadContext.ViewPtr;
     Emu->EmulationMode = EMUMODE_SINGLE_STEP;
     Emu->EmulationDone = false;
 }
 
-void Nes_OnEmulatorSingleFrame(BufferData StaticBuffer)
+void Nes_OnEmulatorSingleFrame(Platform_ThreadContext ThreadContext)
 {
-    Emulator *Emu = StaticBuffer.ViewPtr;
+    Emulator *Emu = ThreadContext.ViewPtr;
     Emu->EmulationMode = EMUMODE_SINGLE_FRAME;
     Emu->EmulationDone = false;
 }
 
-void Nes_OnEmulatorReset(BufferData StaticBuffer)
+void Nes_OnEmulatorReset(Platform_ThreadContext ThreadContext)
 {
-    Emulator *Emu = StaticBuffer.ViewPtr;
+    Emulator *Emu = ThreadContext.ViewPtr;
     Emu->Nes.Clk = 0;
     MC6502_Reset(&Emu->Nes.CPU);
     NESPPU_Reset(&Emu->Nes.PPU);
+    NESAPU_Reset(&Emu->Nes.APU);
 }
 
-void Nes_OnEmulatorTogglePalette(BufferData StaticBuffer)
+void Nes_OnEmulatorTogglePalette(Platform_ThreadContext ThreadContext)
 {
-    Emulator *Emu = StaticBuffer.ViewPtr;
+    Emulator *Emu = ThreadContext.ViewPtr;
     Emu->CurrentPalette++;
     Emu->CurrentPalette &= 0x7;
 }

@@ -23,14 +23,6 @@ typedef struct SmallString {
     char Data[64];
 } SmallString;
 
-typedef struct BufferData 
-{
-    void *ViewPtr; /* whoever creates the buffer data struct owns the pointer */
-    isize SizeBytes;
-} BufferData;
-
-
-
 #define STATIC_ARRAY_SIZE(Arr) (sizeof(Arr) / sizeof((Arr)[0]))
 #define IN_RANGE(LowRange, n, HighRange) ((LowRange) <= (n) && (n) <= (HighRange))
 #define strfy_(x) #x

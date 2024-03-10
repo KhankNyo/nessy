@@ -161,8 +161,6 @@ Continue:
 
 
 
-#define PI64  3.141592653589793
-#define TAU64 6.283185307179586
 #define INV_2_FACTORIAL (.5f)
 #define MAGIC 0.943221151718100
 
@@ -180,12 +178,12 @@ double Sin64(double x)
      */                                                                             
                                                                                     
     /* force x to be in range of 0..2pi */                                          
-    double t = x * (double)(1.0f / TAU64); /* this better get eval at comptime */
+    double t = x * (double)(1.0f / TAU); /* this better get eval at comptime */
     t -= (i64)t;
     Bool8 ShouldBeNegated = t >= .5;
     if (ShouldBeNegated)
         t -= .5;
-    t = t*TAU64 - PI64/2;
+    t = t*TAU - PI/2;
                                                                                     
     /* calculate result  */
     double t2 = t*t;
@@ -200,12 +198,12 @@ double Sin64(double x)
 
 float Sin32(float x) 
 {
-    float t = x * (float)(1.0f / TAU64); /* this better get eval at comptime */
+    float t = x * (float)(1.0f / TAU); /* this better get eval at comptime */
     t -= (i64)t;
     Bool8 ShouldBeNegated = t >= .5;
     if (ShouldBeNegated)
         t -= .5;
-    t = t*TAU64 - PI64/2;
+    t = t*TAU - PI/2;
                                                                                     
     float t2 = t*t;
     float y = 1
@@ -219,8 +217,6 @@ float Sin32(float x)
 
 #undef MAGIC
 #undef INV_2_FACTORIAL
-#undef TAU32
-#undef TAU64
 
 
 

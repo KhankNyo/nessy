@@ -40,6 +40,11 @@ isize FormatStringArgs(char *Buffer, isize BufferSize, va_list Args);
 
 
 
+
+#define PI  3.141592653589793
+#define TAU 6.283185307179586
+
+
 /* 
  * these trig functions are about an order of magnitude faster than the standard library's version, 
  * but they don't accept negative numbers and have high error percentage.
