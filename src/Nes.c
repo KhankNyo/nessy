@@ -426,7 +426,8 @@ Platform_AudioConfig Nes_OnEntry(Platform_ThreadContext ThreadContext)
         .EnableAudio = true,
         .SampleRate = AudioSampleRate,
         .ChannelCount = AudioChannelCount, 
-        .BufferSizeBytes = AudioSampleRate * AudioChannelCount * sizeof(int16_t),
+        .BufferSizeBytes = 256 * AudioChannelCount * sizeof(int16_t),
+        .BufferQueueSize = 8,
     };
 
     
@@ -599,6 +600,8 @@ void Nes_OnEmulatorReset(Platform_ThreadContext ThreadContext)
     MC6502_Reset(&Emu->Nes.CPU);
     NESPPU_Reset(&Emu->Nes.PPU);
     NESAPU_Reset(&Emu->Nes.APU);
+    if (Emu->Nes.Cartridge)
+        NESCartridge_Reset(Emu->Nes.Cartridge);
 }
 
 void Nes_OnEmulatorTogglePalette(Platform_ThreadContext ThreadContext)

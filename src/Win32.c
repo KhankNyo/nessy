@@ -11,8 +11,6 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <wingdi.h>
-#include <mmdeviceapi.h>
-#include <audioclient.h>
 
 
 
@@ -34,16 +32,17 @@ typedef struct Win32_Rect
 typedef struct Win32_Audio
 {
     Platform_AudioConfig Config;
-
-    IMMDevice* Device;
-    IAudioClient* Client;
-    IAudioRenderClient* Renderer;
+    HWAVEOUT WaveOutHandle;
     WAVEFORMATEX Format;
-    UINT32 BufferSizeFrame;
 
-    Bool8 ThreadShouldStop;
-    Bool8 ThreadTerminated;
-    HANDLE BufferRefillEvent;
+    void *Buffer;
+    WAVEHDR *Headers;
+    u32 IndvBufferSize;
+    i32 QueueSize;
+    i32 ReadyBufferCount;
+
+    volatile Bool8 ThreadShouldStop;
+    volatile Bool8 ThreadTerminated;
     HANDLE ThreadHandle;
 } Win32_Audio;
 
@@ -75,45 +74,8 @@ static Nes_DisplayableStatus sWin32_DisplayableStatus;
 static Platform_FrameBuffer sWin32_FrameBuffer;
 static Platform_ThreadContext sWin32_ThreadContext;
 
-static volatile Win32_Audio sWin32_Audio = { 0 };
-
-
-#define GUID_SECT
-
-#define __DEFINE_GUID(n,l,w1,w2,b1,b2,b3,b4,b5,b6,b7,b8) static const GUID n GUID_SECT = {l,w1,w2,{b1,b2,b3,b4,b5,b6,b7,b8}}
-#define __DEFINE_IID(n,l,w1,w2,b1,b2,b3,b4,b5,b6,b7,b8) static const IID n GUID_SECT = {l,w1,w2,{b1,b2,b3,b4,b5,b6,b7,b8}}
-#define __DEFINE_CLSID(n,l,w1,w2,b1,b2,b3,b4,b5,b6,b7,b8) static const CLSID n GUID_SECT = {l,w1,w2,{b1,b2,b3,b4,b5,b6,b7,b8}}
-#define PA_DEFINE_CLSID(className, l, w1, w2, b1, b2, b3, b4, b5, b6, b7, b8) \
-        __DEFINE_CLSID(s_CLS_##className, 0x##l, 0x##w1, 0x##w2, 0x##b1, 0x##b2, 0x##b3, 0x##b4, 0x##b5, 0x##b6, 0x##b7, 0x##b8)
-#define PA_DEFINE_IID(interfaceName, l, w1, w2, b1, b2, b3, b4, b5, b6, b7, b8) \
-        __DEFINE_IID(s_IID_##interfaceName, 0x##l, 0x##w1, 0x##w2, 0x##b1, 0x##b2, 0x##b3, 0x##b4, 0x##b5, 0x##b6, 0x##b7, 0x##b8)
-
-// "1CB9AD4C-DBFA-4c32-B178-C2F568A703B2"
-PA_DEFINE_IID(IAudioClient, 1cb9ad4c, dbfa, 4c32, b1, 78, c2, f5, 68, a7, 03, b2);
-// "726778CD-F60A-4EDA-82DE-E47610CD78AA"
-PA_DEFINE_IID(IAudioClient2, 726778cd, f60a, 4eda, 82, de, e4, 76, 10, cd, 78, aa);
-// "7ED4EE07-8E67-4CD4-8C1A-2B7A5987AD42"
-PA_DEFINE_IID(IAudioClient3, 7ed4ee07, 8e67, 4cd4, 8c, 1a, 2b, 7a, 59, 87, ad, 42);
-// "1BE09788-6894-4089-8586-9A2A6C265AC5"
-PA_DEFINE_IID(IMMEndpoint, 1be09788, 6894, 4089, 85, 86, 9a, 2a, 6c, 26, 5a, c5);
-// "A95664D2-9614-4F35-A746-DE8DB63617E6"
-PA_DEFINE_IID(IMMDeviceEnumerator, a95664d2, 9614, 4f35, a7, 46, de, 8d, b6, 36, 17, e6);
-// "BCDE0395-E52F-467C-8E3D-C4579291692E"
-PA_DEFINE_CLSID(IMMDeviceEnumerator, bcde0395, e52f, 467c, 8e, 3d, c4, 57, 92, 91, 69, 2e);
-// "F294ACFC-3146-4483-A7BF-ADDCA7C260E2"
-PA_DEFINE_IID(IAudioRenderClient, f294acfc, 3146, 4483, a7, bf, ad, dc, a7, c2, 60, e2);
-// "C8ADBD64-E71E-48a0-A4DE-185C395CD317"
-PA_DEFINE_IID(IAudioCaptureClient, c8adbd64, e71e, 48a0, a4, de, 18, 5c, 39, 5c, d3, 17);
-// *2A07407E-6497-4A18-9787-32F79BD0D98F*  Or this??
-PA_DEFINE_IID(IDeviceTopology, 2A07407E, 6497, 4A18, 97, 87, 32, f7, 9b, d0, d9, 8f);
-// *AE2DE0E4-5BCA-4F2D-AA46-5D13F8FDB3A9*
-PA_DEFINE_IID(IPart, AE2DE0E4, 5BCA, 4F2D, aa, 46, 5d, 13, f8, fd, b3, a9);
-// *4509F757-2D46-4637-8E62-CE7DB944F57B*
-PA_DEFINE_IID(IKsJackDescription, 4509F757, 2D46, 4637, 8e, 62, ce, 7d, b9, 44, f5, 7b);
-
-#undef GUID_SECT
-
-
+static Win32_Audio sWin32_Audio = { 0 };
+static CRITICAL_SECTION sWin32_Audio_AccessingBufferCount;
 
 
 static void Win32_Fatal(const char *ErrorMessage)
@@ -675,56 +637,90 @@ static void Win32_UpdateWindowTimer(HWND Window, UINT DontCare, UINT_PTR DontCar
 
 
 
+static void CALLBACK Win32_WaveOutCallback(
+    HWAVEOUT WaveOut, 
+    UINT Msg, 
+    DWORD_PTR UserData, 
+    DWORD_PTR Unused, 
+    DWORD_PTR Unused1)
+{
+    (void)WaveOut, (void)Msg, (void)UserData, (void)Unused, (void)Unused1;
+    if (Msg != WOM_DONE)
+        return;
+
+
+    EnterCriticalSection(&sWin32_Audio_AccessingBufferCount);
+    {
+        sWin32_Audio.ReadyBufferCount++;
+    }
+    LeaveCriticalSection(&sWin32_Audio_AccessingBufferCount);
+}
 
 static DWORD Win32_AudioThread(void *UserData)
 {
     (void)UserData;
     double t = 0;
     double dt = 1.0 / sWin32_Audio.Config.SampleRate;
-    sWin32_Audio.ThreadTerminated = false;
-    IAudioClient_Start(sWin32_Audio.Client);
+    u8 *Buffer = sWin32_Audio.Buffer;
+    WAVEHDR *Headers = sWin32_Audio.Headers;
+    isize IndvBufferSize = sWin32_Audio.IndvBufferSize;
+    isize IndvBufferFrameCount = sWin32_Audio.IndvBufferSize / sizeof(int16_t) / sWin32_Audio.Config.ChannelCount;
+    isize QueueIndex = 0;
 
     while (!sWin32_Audio.ThreadShouldStop)
     {
-        DWORD WaitResult = WaitForSingleObject(sWin32_Audio.BufferRefillEvent, INFINITE);
-        if (WAIT_OBJECT_0 != WaitResult)
-            goto AudioFailed;
-
-        u32 UnreadFrames;
-        HRESULT hr = IAudioClient_GetCurrentPadding(sWin32_Audio.Client, &UnreadFrames);
-        if (FAILED(hr))
-            goto AudioFailed;
-
-        UINT32 FramesToWrite = sWin32_Audio.BufferSizeFrame - UnreadFrames;
-        BYTE *Buffer;
-        hr = IAudioRenderClient_GetBuffer(sWin32_Audio.Renderer, FramesToWrite, &Buffer);
-        if (FAILED(hr))
-            goto AudioFailed;
-
-        int16_t *DataPtr = (int16_t *)Buffer;
-        for (u32 f = 0; f < FramesToWrite; f++)
+        while (1)
         {
-            int16_t AudioSample = Nes_OnAudioSampleRequest(sWin32_ThreadContext, t);
-            t += dt;
-            for (u32 c = 0; c < sWin32_Audio.Config.ChannelCount; c++)
+            /* don't optimize and cannot take address 
+             * (ie no memory location, so it has to read into a register) */
+            volatile register i32 ReadyBufferCount = 0;
+            EnterCriticalSection(&sWin32_Audio_AccessingBufferCount);
             {
-                *DataPtr++ = AudioSample;
+                ReadyBufferCount = sWin32_Audio.ReadyBufferCount;
             }
+            LeaveCriticalSection(&sWin32_Audio_AccessingBufferCount);
+            if (ReadyBufferCount > 0)
+                break;
+            Sleep(1);
         }
+        do {
+            i16 *SamplePtr = (i16*)&Buffer[
+                QueueIndex * IndvBufferSize
+            ];
+            WAVEHDR *Header = &Headers[QueueIndex];
+            Header->lpData = (LPSTR)SamplePtr;
+            Header->dwBufferLength = IndvBufferSize;
 
+            /* fill the audio buffer */
+            for (u32 i = 0; i < IndvBufferFrameCount; i++)
+            {
+                i16 AudioSample = Nes_OnAudioSampleRequest(sWin32_ThreadContext, t);
+                t += dt;
+                for (u32 c = 0; c < sWin32_Audio.Config.ChannelCount; c++)
+                {
+                    *SamplePtr++ = AudioSample;
+                }
+            }
 
-        hr = IAudioRenderClient_ReleaseBuffer(sWin32_Audio.Renderer, FramesToWrite, 0);
-        if (FAILED(hr))
-            goto AudioFailed;
+            /* update buffer count */
+            EnterCriticalSection(&sWin32_Audio_AccessingBufferCount);
+            {
+                sWin32_Audio.ReadyBufferCount--;
+            }
+            LeaveCriticalSection(&sWin32_Audio_AccessingBufferCount);
+
+            /* create the audio buffer for waveout */
+            if (Header->dwFlags & WHDR_PREPARED)
+                waveOutUnprepareHeader(sWin32_Audio.WaveOutHandle, Header, sizeof *Header);
+            waveOutPrepareHeader(sWin32_Audio.WaveOutHandle, Header, sizeof *Header);
+            waveOutWrite(sWin32_Audio.WaveOutHandle, Header, sizeof *Header);
+
+            QueueIndex++;
+            if (QueueIndex == sWin32_Audio.QueueSize)
+                QueueIndex = 0;
+        } while (sWin32_Audio.ReadyBufferCount > 0);
     }
-    IAudioClient_Stop(sWin32_Audio.Client);
     sWin32_Audio.ThreadTerminated = true;
-    return 0;
-
-AudioFailed:
-    IAudioClient_Stop(sWin32_Audio.Client);
-    sWin32_Audio.ThreadTerminated = true;
-    Nes_OnAudioFailed(sWin32_ThreadContext);
     return 0;
 }
 
@@ -738,137 +734,84 @@ static void Win32_DestroyAudio(void)
         CloseHandle(sWin32_Audio.ThreadHandle);
     }
 
-    IAudioRenderClient_Release(sWin32_Audio.Renderer);
-    IAudioClient_Release(sWin32_Audio.Client);
-    IMMDevice_Release(sWin32_Audio.Device);
-    CloseHandle(sWin32_Audio.BufferRefillEvent);
+
+    DeleteCriticalSection(&sWin32_Audio_AccessingBufferCount);
+
+
+    /* don't need to deallocate the buffer, windows does it faster than us */
+    (void)sWin32_Audio.Buffer;
+    waveOutClose(sWin32_Audio.WaveOutHandle);
 }
 
 
+/* the reason for using waveOut instead of other libraries like WASAPI 
+ * is because waveOut is more reliable (because of how old it is), 
+ * and because WASAPI works on my win10 machine but not my win11 laptop (waveOut works on both) */
 static Bool8 Win32_InitializeAudio(Platform_AudioConfig Config, int BitsPerSample)
 {
-#define SEC_TO_100NS(sec) (sec)*10000000
-
-    int FrameSize = Config.ChannelCount * BitsPerSample / 8;
-    Win32_Audio Audio = {
-        .Config = Config,
-        .Format = {
-            .cbSize = 0,
-            .nChannels = Config.ChannelCount, 
-            .wFormatTag = WAVE_FORMAT_PCM,
-            .nBlockAlign = FrameSize,
-            .wBitsPerSample = BitsPerSample, 
-            .nSamplesPerSec = Config.SampleRate, 
-            .nAvgBytesPerSec = Config.SampleRate * FrameSize,
-        },
+    sWin32_Audio.Config = Config;
+    int BytesPerSample = BitsPerSample / 8;
+    int BytesPerFrame = BytesPerSample * Config.ChannelCount;
+    sWin32_Audio.Format = (WAVEFORMATEX) {
+        .cbSize = 0,
+        .nChannels = Config.ChannelCount,
+        .wFormatTag = WAVE_FORMAT_PCM,
+        .nBlockAlign = BytesPerFrame,
+        .nSamplesPerSec = Config.SampleRate, 
+        .wBitsPerSample = BitsPerSample,
+        .nAvgBytesPerSec = BytesPerSample * Config.SampleRate,
     };
-    HRESULT hr;
 
-    /* get audio device */
-    {
-        IMMDeviceEnumerator* DeviceEnumerator;
-        hr = CoCreateInstance(&s_CLS_IMMDeviceEnumerator, 
-            NULL, 
-            CLSCTX_INPROC_SERVER, 
-            &s_IID_IMMDeviceEnumerator, 
-            (void **)&DeviceEnumerator
-        ); 
-        if (FAILED(hr))
-            return false;
-
-        hr = IMMDeviceEnumerator_GetDefaultAudioEndpoint(
-            DeviceEnumerator, 
-            eRender, 
-            eMultimedia, 
-            &Audio.Device
-        );
-        if (FAILED(hr)) 
-            return false;
-
-        IMMDeviceEnumerator_Release(DeviceEnumerator);
-    }
-
-    /* audio client bs */
-    hr = IMMDevice_Activate(
-        Audio.Device,
-        &s_IID_IAudioClient, 
-        CLSCTX_INPROC_SERVER, 
-        NULL, 
-        (void **)&Audio.Client
-    );
-    if (FAILED(hr)) 
-        return false;
-
-
-    /* setup sound sample */
-    REFERENCE_TIME BufferDuration100ns = SEC_TO_100NS(Config.BufferSizeBytes) / Config.SampleRate;
-    hr = IAudioClient_Initialize(
-        Audio.Client, 
-        AUDCLNT_SHAREMODE_SHARED,   
-        AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 
-        BufferDuration100ns, 
+    /* create waveout */
+    MMRESULT ErrorCode = waveOutOpen(
+        &sWin32_Audio.WaveOutHandle, 
+        WAVE_MAPPER, 
+        &sWin32_Audio.Format, 
+        (DWORD_PTR)Win32_WaveOutCallback, 
         0, 
-        &Audio.Format, 
-        NULL
+        CALLBACK_FUNCTION
     );
-    if (FAILED(hr)) 
-        return false;
-
-    /* create an event handler to fill the buffer when needed */
-    Audio.BufferRefillEvent = CreateEventExA(NULL, NULL, 0, SYNCHRONIZE | EVENT_MODIFY_STATE);
-    if (Audio.BufferRefillEvent == NULL 
-    || Audio.BufferRefillEvent == INVALID_HANDLE_VALUE) 
-        return false;
-
-    /* set the event */
-    hr = IAudioClient_SetEventHandle(Audio.Client, Audio.BufferRefillEvent);
-    if (FAILED(hr)) 
-        return false;
+    if (MMSYSERR_NOERROR != ErrorCode)
+        goto WaveOutOpenFailed;
 
 
-    /* get the audio render service */
-    hr = IAudioClient_GetService(Audio.Client, &s_IID_IAudioRenderClient, (void**)&Audio.Renderer);
-    if (FAILED(hr)) 
-        return false;
+    /* allocate memory for the sound buffer */
+    isize TotalBufferSizeBytes = 
+        (Config.BufferSizeBytes + sizeof(WAVEHDR)) * Config.BufferQueueSize;
+    u8 *AudioBuffer = Win32_AllocateMemory(TotalBufferSizeBytes);
+    if (NULL == AudioBuffer)
+        goto MemoryAllocationFailed;
 
 
-    /* get the buffer size (in frame count: channel * sampleSizeBytes) */
-    hr = IAudioClient_GetBufferSize(Audio.Client, &Audio.BufferSizeFrame);
-    if (FAILED(hr)) 
-        return false;
+    sWin32_Audio.Buffer = AudioBuffer;
+    sWin32_Audio.Headers = (WAVEHDR*)(AudioBuffer + Config.BufferSizeBytes * Config.BufferQueueSize);
+    sWin32_Audio.IndvBufferSize = Config.BufferSizeBytes;
+    sWin32_Audio.QueueSize = Config.BufferQueueSize;
+    sWin32_Audio.ReadyBufferCount = Config.BufferQueueSize;
 
-    {
-        BYTE* Tmp;
-        hr = IAudioRenderClient_GetBuffer(Audio.Renderer, Audio.BufferSizeFrame, &Tmp);
-        if (FAILED(hr)) 
-            return false;
 
-        /* clear the buffer to 0 */
-        hr = IAudioRenderClient_ReleaseBuffer(Audio.Renderer, Audio.BufferSizeFrame, AUDCLNT_BUFFERFLAGS_SILENT);
-        if (FAILED(hr)) 
-            return false;
-    }
+    InitializeCriticalSection(&sWin32_Audio_AccessingBufferCount);
 
-    /* create audio thread */
-    Audio.ThreadShouldStop = false;
-    Audio.ThreadTerminated = true;
-    Audio.ThreadHandle = CreateThread(
-        NULL, 
-        0, 
-        Win32_AudioThread, 
-        NULL, 
-        0, 
-        NULL
-    );
-    if (NULL == Audio.ThreadHandle)
-    {
-        return false;
-    }
 
-    sWin32_Audio = Audio;
+    /* create a thread handle */
+    sWin32_Audio.ThreadShouldStop = false;
+    sWin32_Audio.ThreadTerminated = false;
+    sWin32_Audio.ThreadHandle = CreateThread(NULL, 0, Win32_AudioThread, NULL, 0, NULL);
+    if (NULL == sWin32_Audio.ThreadHandle)
+        goto FailedToCreateAudioThread;
+
     return true;
 
-#undef SEC_TO_100NS
+FailedToCreateAudioThread:
+    sWin32_Audio.ThreadTerminated = true;
+    sWin32_Audio.ThreadHandle = NULL;
+    /* don't want a buffer lingering around during runtime */
+    Win32_DeallocateMemory(sWin32_Audio.Buffer);
+    sWin32_Audio.Buffer = NULL;
+MemoryAllocationFailed:
+    waveOutClose(sWin32_Audio.WaveOutHandle);
+WaveOutOpenFailed:
+    return false;
 }
 
 
@@ -937,10 +880,11 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
 
     /* call the emulator's entry point */
     Platform_AudioConfig AudioConfig = Nes_OnEntry(sWin32_ThreadContext);
+    Bool8 HasAudio = false;
     if (AudioConfig.EnableAudio)
     {
-        Bool8 AudioInitOk = Win32_InitializeAudio(AudioConfig, 16);
-        if (!AudioInitOk)
+        HasAudio = Win32_InitializeAudio(AudioConfig, 16);
+        if (!HasAudio)
         {
             Nes_OnAudioFailed(sWin32_ThreadContext);
             Win32_ErrorBox("Unable to initialize audio.");
@@ -954,9 +898,8 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
     {
         double Now = Platform_GetTimeMillisec();
         Nes_OnLoop(sWin32_ThreadContext, Now - TimeOrigin);
+        Sleep(1);
     }
-
-
 
 
     /* don't need to clean up the window, windows does it faster than us */
@@ -965,7 +908,7 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
     (void)sWin32_ThreadContext;
 
     /* but we do need to cleanup audio devices */
-    if (AudioConfig.EnableAudio)
+    if (AudioConfig.EnableAudio && HasAudio)
     {
         Win32_DestroyAudio();
     }

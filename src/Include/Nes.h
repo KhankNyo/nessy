@@ -24,6 +24,7 @@ typedef struct Platform_AudioConfig
     u32 SampleRate;
     u32 ChannelCount;
     u32 BufferSizeBytes;
+    u32 BufferQueueSize;
     Bool8 EnableAudio;
 } Platform_AudioConfig;
 
