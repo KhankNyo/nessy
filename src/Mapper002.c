@@ -1,4 +1,5 @@
 #ifndef NES_MAPPER_002_C
+#define NES_MAPPER_002_C
 
 #include <stdlib.h>
 #include "MapperInterface.h"
@@ -17,13 +18,13 @@ typedef struct NESMapper002
 static u8 *Mp002_GetPrgRomPtr(NESMapper002 *Mp002)
 {
     u8 *BytePtr = (u8*)(Mp002 + 1);
-    return BytePtr;
+    return BytePtr + Mp002->ChrRamSize;
 }
 
 static u8 *Mp002_GetChrPtr(NESMapper002 *Mp002)
 {
     u8 *BytePtr = (u8*)(Mp002 + 1);
-    return BytePtr + Mp002->PrgRomSize;
+    return BytePtr;
 }
 
 
@@ -98,7 +99,7 @@ u8 NESMapper002_PPURead(NESMapperInterface *MapperInterface, u16 Addr)
 
 
 
-void NESMapper002_CPUWrite(NESMapperInterface *MapperInterface, u16 Addr, u8 Byte)
+void NESMapper002_PPUWrite(NESMapperInterface *MapperInterface, u16 Addr, u8 Byte)
 {
     NESMapper002 *Mapper = MapperInterface;
     /* palette */
@@ -110,7 +111,7 @@ void NESMapper002_CPUWrite(NESMapperInterface *MapperInterface, u16 Addr, u8 Byt
     }
 }
 
-void NESMapper002_PPUWrite(NESMapperInterface *MapperInterface, u16 Addr, u8 Byte)
+void NESMapper002_CPUWrite(NESMapperInterface *MapperInterface, u16 Addr, u8 Byte)
 {
     NESMapper002 *Mapper = MapperInterface;
     /* bank select */

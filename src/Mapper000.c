@@ -1,4 +1,5 @@
 #ifndef NES_MAPPER_000_C
+#define NES_MAPPER_000_C
 
 #include <stdlib.h>
 #include "MapperInterface.h"
