@@ -31,6 +31,7 @@ typedef struct Sweeper
 
     u16 ShiftCount;
     u16 ShiftedTimerPeriod;
+    u16 TmpClkDivider;
     u16 ClkDivider;
 } Sweeper;
 
@@ -42,7 +43,6 @@ typedef struct Envelope
     Bool8 StartFlag;
 
     u16 ClkDivider;
-    u16 TmpClkDivider;
     u16 LengthCounter;
 
     u8 Volume;
@@ -173,8 +173,7 @@ static void NESAPU_EnvelopeUpdate(Envelope *VolumeCtrl)
     {
         VolumeCtrl->StartFlag = false;
         VolumeCtrl->VolumeDecayCounter = MAX_VOLUME;
-        VolumeCtrl->ClkDivider = VolumeCtrl->TmpClkDivider;
-
+        VolumeCtrl->ClkDivider = VolumeCtrl->Volume;
     }
 
 
@@ -188,11 +187,8 @@ static void NESAPU_EnvelopeUpdate(Envelope *VolumeCtrl)
     }
 }
 
-static double NESAPU_SequencerGetVolume(Sweeper *PitchCtrl, Envelope *VolumeCtrl, u16 CurrentTimerPeriod)
+static double NESAPU_SequencerGetVolume(Sweeper *PitchCtrl, Envelope *VolumeCtrl)
 {
-    PitchCtrl->MutingFlag = 
-        CurrentTimerPeriod < 8 /* nameless magic, consult nesdev Sweeper section for details */
-        || PitchCtrl->ShiftedTimerPeriod > 0x07FF; /* yet another nameless magic, consult Sweeper section of nesdev */
     if (PitchCtrl->MutingFlag || !VolumeCtrl->EnableFlag || 0 == VolumeCtrl->LengthCounter)
         return 0;
 
@@ -242,6 +238,9 @@ static double NESAPU_GetTriangleSample(TriangleSequencer *Seq, double t)
 
 static void NESAPU_SweeperUpdate(Sweeper *PitchCtrl, u16 CurrentTimerPeriod, Bool8 UseOnesComplement)
 {
+    PitchCtrl->MutingFlag = 
+        CurrentTimerPeriod < 8 /* nameless magic, consult nesdev Sweeper section for details */
+        || PitchCtrl->ShiftedTimerPeriod > 0x07FF; /* yet another nameless magic, consult Sweeper section of nesdev */
     uint ChangeAmount = CurrentTimerPeriod >> PitchCtrl->ShiftCount;
     if (PitchCtrl->NegateFlag)
     {
@@ -256,18 +255,19 @@ static void NESAPU_SweeperUpdate(Sweeper *PitchCtrl, u16 CurrentTimerPeriod, Boo
     PitchCtrl->ShiftedTimerPeriod = NewPeriod;
 }
 
-static u16 NESAPU_SweeperUpdateTimerPeriod(Sweeper *PitchCtrl, u16 CurrentTimerPeriod, u16 EnvelopeClkDivider)
+static u16 NESAPU_SweeperUpdateTimerPeriod(Sweeper *PitchCtrl, u16 CurrentTimerPeriod)
 {
     u16 NewTimerPeriod = CurrentTimerPeriod;
     if (PitchCtrl->ClkDivider == 0 && PitchCtrl->EnableFlag && PitchCtrl->ShiftCount != 0)
     {
         if (!PitchCtrl->MutingFlag)
             NewTimerPeriod = PitchCtrl->ShiftedTimerPeriod;
+
         /* else the period remain unchanged */
     }
     if (PitchCtrl->ClkDivider == 0 || PitchCtrl->ReloadFlag)
     {
-        PitchCtrl->ClkDivider = EnvelopeClkDivider;
+        PitchCtrl->ClkDivider = PitchCtrl->TmpClkDivider;
         PitchCtrl->ReloadFlag = false;
     }
     else PitchCtrl->ClkDivider--;
@@ -323,6 +323,8 @@ void NESAPU_StepClock(NESAPU *This)
         This->FrameClockCounter++;
         NESAPU_NoiseUpdateShiftRegister(&This->Noise);
 
+        NESAPU_SweeperUpdate(&This->Pulse1.Sweeper, This->Pulse1.TimerPeriod, true);
+        NESAPU_SweeperUpdate(&This->Pulse2.Sweeper, This->Pulse2.TimerPeriod, false);
         /* adjust volume envelope */
         if (IS_QUARTER_CLK(This->FrameClockCounter))
         {
@@ -334,17 +336,13 @@ void NESAPU_StepClock(NESAPU *This)
         /* note length and freq sweep */
         if (IS_HALF_CLK(This->FrameClockCounter))
         {
-            NESAPU_SweeperUpdate(&This->Pulse1.Sweeper, This->Pulse1.TimerPeriod, true);
-            NESAPU_SweeperUpdate(&This->Pulse2.Sweeper, This->Pulse2.TimerPeriod, false);
             This->Pulse1.TimerPeriod = NESAPU_SweeperUpdateTimerPeriod(
                 &This->Pulse1.Sweeper, 
-                This->Pulse1.TimerPeriod, 
-                This->Pulse1.Envelope.TmpClkDivider
+                This->Pulse1.TimerPeriod
             );
             This->Pulse2.TimerPeriod = NESAPU_SweeperUpdateTimerPeriod(
                 &This->Pulse2.Sweeper,
-                This->Pulse2.TimerPeriod,
-                This->Pulse2.Envelope.TmpClkDivider
+                This->Pulse2.TimerPeriod
             );
         }
         /* the end of frame, reset the frame clk */
@@ -353,10 +351,10 @@ void NESAPU_StepClock(NESAPU *This)
 
 
         double Pulse1 = 
-            NESAPU_SequencerGetVolume(&This->Pulse1.Sweeper, &This->Pulse1.Envelope, This->Pulse1.TimerPeriod)
+            NESAPU_SequencerGetVolume(&This->Pulse1.Sweeper, &This->Pulse1.Envelope)
             * GenerateSquareWave(&This->Pulse1, This->ElapsedTime); 
         double Pulse2 = 
-            NESAPU_SequencerGetVolume(&This->Pulse2.Sweeper, &This->Pulse2.Envelope, This->Pulse2.TimerPeriod)
+            NESAPU_SequencerGetVolume(&This->Pulse2.Sweeper, &This->Pulse2.Envelope)
             * GenerateSquareWave(&This->Pulse2, This->ElapsedTime);
         double Triangle = NESAPU_GetTriangleSample(&This->Triangle, This->ElapsedTime);
         double Noise = NESAPU_GetNoiseSample(&This->Noise);
@@ -420,11 +418,12 @@ static void NESAPU_WritePulseRegisters(NESAPU *This, Sequencer *Pulse, u16 Addr,
     case 0x4001:
     case 0x4005:
     {
-        Pulse->Envelope.TmpClkDivider = (Byte >> 4) & 0x7;
+        Pulse->Sweeper.TmpClkDivider = (Byte >> 4) & 0x7;
         Pulse->Sweeper.EnableFlag = Byte & 0x80;
         Pulse->Sweeper.NegateFlag = Byte & 0x08;
         Pulse->Sweeper.ShiftCount = Byte & 0x07;
         Pulse->Sweeper.ReloadFlag = true;
+        NESAPU_SweeperUpdate(&Pulse->Sweeper, Pulse->TimerPeriod, &This->Pulse1 == Pulse);
     } break;
     case 0x4002:
     case 0x4006:
