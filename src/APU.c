@@ -4,6 +4,19 @@
 #include "Common.h"
 
 
+
+typedef struct Sweeper 
+{
+    Bool8 Enable;
+    Bool8 Negate;
+    Bool8 Reload;
+    Bool8 IsMuting;
+
+    u16 ShiftCount;
+    u16 ShifterResult;
+    u16 Divider;
+} Sweeper;
+
 typedef struct Sequencer 
 {
     double DutyCycle;
@@ -21,9 +34,7 @@ typedef struct Sequencer
     Bool8 ConstantVolume;
     Bool8 Start;
 
-    /* specific */
-    u16 NoiseShiftRegister:15;
-    u16 NoiseModeFlag;
+    Sweeper Sweeper;
 } Sequencer;
 
 typedef struct TriangleSequencer 
@@ -65,9 +76,7 @@ void NESAPU_Reset(NESAPU *This)
     This->Triangle = (TriangleSequencer) { 0 };
     This->Pulse1 = (Sequencer) { 0 };
     This->Pulse2 = (Sequencer) { 0 };
-    This->Noise = (Sequencer) { 
-        .NoiseShiftRegister = 1,
-    };
+    This->Noise = (Sequencer) { 0 };
 }
 
 NESAPU NESAPU_Init(u64 SeedForNoiseGeneration)
@@ -135,9 +144,15 @@ static void NESAPU_SequencerUpdateVolume(Sequencer *Seq)
 
 static double NESAPU_SequencerGetVolume(Sequencer *Seq)
 {
+    Seq->Sweeper.IsMuting = 
+        Seq->Timer < 8
+        || Seq->Sweeper.ShifterResult > 0x07FF;
+    if (Seq->Sweeper.IsMuting)
+        return 0;
+
     if (Seq->ConstantVolume)
-        return (double)Seq->Volume / 15;
-    return (double)Seq->DecayCounter / 15;
+        return (double)Seq->Volume * (1.0 / 15);
+    return (double)Seq->DecayCounter * (1.0 / 15);
 }
 
 static void NESAPU_UpdateTriangleSequencer(TriangleSequencer *Seq)
@@ -170,6 +185,40 @@ static double NESAPU_GetTriangleSample(TriangleSequencer *Seq, double t)
 }
 
 
+static void NESAPU_CalculateTargetPeriod(Sequencer *Seq, Bool8 UseOnesComplement)
+{
+    uint ChangeAmount = Seq->Timer >> Seq->Sweeper.ShiftCount;
+    if (Seq->Sweeper.Negate)
+    {
+        ChangeAmount = UseOnesComplement? 
+            ~ChangeAmount
+            : -ChangeAmount;
+    }
+
+    u16 NewPeriod = Seq->Timer + ChangeAmount;
+    if (NewPeriod & 0x8000)
+        NewPeriod = 0;
+    Seq->Sweeper.ShifterResult = NewPeriod;
+}
+
+static void NESAPU_UpdatePeriod(Sequencer *Seq)
+{
+    if (Seq->Sweeper.Divider == 0 && Seq->Sweeper.Enable && Seq->Sweeper.ShiftCount != 0)
+    {
+        if (!Seq->Sweeper.IsMuting)
+            Seq->Timer = Seq->Sweeper.ShifterResult;
+        /* else the period remain unchanged */
+    }
+    if (Seq->Sweeper.Divider == 0 || Seq->Sweeper.Reload)
+    {
+        Seq->Sweeper.Divider = Seq->DividerPeriodReload + 1;
+        Seq->Sweeper.Reload = false;
+    }
+    else Seq->Sweeper.Divider--;
+
+}
+
+
 void NESAPU_StepClock(NESAPU *This)
 {
 #define IS_QUARTER_CLK(Clk) ((Clk) == 3729 || (Clk) == 7457 || (Clk) == 11186 || (Clk) == 14916)
@@ -179,6 +228,8 @@ void NESAPU_StepClock(NESAPU *This)
     {
         This->ElapsedTime += 2.0 / NES_CPU_CLK;
         This->FrameClockCounter++;
+        NESAPU_CalculateTargetPeriod(&This->Pulse1, true);
+        NESAPU_CalculateTargetPeriod(&This->Pulse2, false);
 
         /* adjust volume envelope */
         if (IS_QUARTER_CLK(This->FrameClockCounter))
@@ -186,10 +237,13 @@ void NESAPU_StepClock(NESAPU *This)
             NESAPU_SequencerUpdateVolume(&This->Pulse1);
             NESAPU_SequencerUpdateVolume(&This->Pulse2);
             NESAPU_UpdateTriangleSequencer(&This->Triangle);
+
         }
         /* note length and freq sweep */
         if (IS_HALF_CLK(This->FrameClockCounter))
         {
+            NESAPU_UpdatePeriod(&This->Pulse1);
+            NESAPU_UpdatePeriod(&This->Pulse2);
         }
 
         /* clock pulse 1 */
@@ -259,6 +313,10 @@ void NESAPU_ExternalWrite(NESAPU *This, u16 Address, u8 Byte)
     case 0x4001:
     {
         This->Pulse1.DividerPeriodReload = (Byte >> 4) & 0x7;
+        This->Pulse1.Sweeper.Enable = Byte & 0x80;
+        This->Pulse1.Sweeper.Negate = Byte & 0x08;
+        This->Pulse1.Sweeper.ShiftCount = Byte & 0x07;
+        This->Pulse1.Sweeper.Reload = true;
     } break;
     case 0x4002:
     {
@@ -283,6 +341,10 @@ void NESAPU_ExternalWrite(NESAPU *This, u16 Address, u8 Byte)
     case 0x4005:
     {
         This->Pulse2.DividerPeriodReload = (Byte >> 4) & 0x7;
+        This->Pulse2.Sweeper.Enable = Byte & 0x80;
+        This->Pulse2.Sweeper.Negate = Byte & 0x08;
+        This->Pulse2.Sweeper.ShiftCount = Byte & 0x07;
+        This->Pulse2.Sweeper.Reload = true;
     } break;
     case 0x4006:
     {
@@ -331,7 +393,6 @@ void NESAPU_ExternalWrite(NESAPU *This, u16 Address, u8 Byte)
     case 0x400F:
     {
         This->Noise.LengthCounter = This->LengthCounterTable[Byte >> 3];
-        This->Noise.NoiseModeFlag = Byte >> 7;
         This->Noise.Start = true;
     } break;
     /* DMC */

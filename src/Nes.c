@@ -352,7 +352,7 @@ static void NesInternal_OnPPUFrameCompletion(void *UserData)
     Emulator *Emu = UserData;
 
     /* swap the front and back buffers */
-    u32 (*Tmp)[] = Emu->BackBuffer;
+    u32 (*Tmp)[NES_SCREEN_BUFFER_SIZE] = Emu->BackBuffer;
     Emu->BackBuffer = Emu->FrontBuffer;
     Emu->FrontBuffer = Tmp;
 
@@ -493,7 +493,7 @@ int16_t Nes_OnAudioSampleRequest(Platform_ThreadContext ThreadContext, double t)
 
     if (!Emu->EmulationHalted)
     {
-        for (u32 i = 0; i <= Emu->MasterClkPerAudioSample; i++)
+        for (u32 i = 0; i < Emu->MasterClkPerAudioSample; i++)
         {
             Nes_StepClock(Nes);
         }

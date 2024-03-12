@@ -673,7 +673,7 @@ static DWORD Win32_AudioThread(void *UserData)
         {
             /* don't optimize and cannot take address 
              * (ie no memory location, so it has to read into a register) */
-            volatile register i32 ReadyBufferCount = 0;
+            register volatile i32 ReadyBufferCount = 0;
             EnterCriticalSection(&sWin32_Audio_AccessingBufferCount);
             {
                 ReadyBufferCount = sWin32_Audio.ReadyBufferCount;
