@@ -43,6 +43,7 @@ typedef struct Envelope
 
     u16 ClkDivider;
     u16 TmpClkDivider;
+    u16 LengthCounter;
 
     u8 Volume;
     u8 VolumeDecayCounter;
@@ -51,7 +52,6 @@ typedef struct Envelope
 typedef struct Sequencer 
 {
     double DutyCyclePercentage;
-    u16 LengthCounter;
     u16 TmpTimerPeriod;
     u16 TimerPeriod;
 
@@ -77,7 +77,6 @@ typedef struct NoiseSequencer
 {
     u16 Timer;
     u16 LinearFeedbackShiftRegister:15;
-    u16 LengthCounter;
     Bool8 ModeFlag;
 
     /* volume ctrl */
@@ -184,6 +183,17 @@ static void NESAPU_EnvelopeUpdate(Envelope *VolumeCtrl)
         VolumeCtrl->StartFlag = false;
         VolumeCtrl->VolumeDecayCounter = MAX_VOLUME;
         VolumeCtrl->ClkDivider = VolumeCtrl->TmpClkDivider;
+
+    }
+
+
+    if (!VolumeCtrl->EnableFlag)
+    {
+        VolumeCtrl->LengthCounter = 0;
+    }
+    else if (VolumeCtrl->LengthCounter && !VolumeCtrl->LoopFlag)
+    {
+        VolumeCtrl->LengthCounter--;
     }
 }
 
@@ -192,7 +202,7 @@ static double NESAPU_SequencerGetVolume(Sweeper *PitchCtrl, Envelope *VolumeCtrl
     PitchCtrl->MutingFlag = 
         CurrentTimerPeriod < 8 /* nameless magic, consult nesdev Sweeper section for details */
         || PitchCtrl->ShiftedTimerPeriod > 0x07FF; /* yet another nameless magic, consult Sweeper section of nesdev */
-    if (PitchCtrl->MutingFlag || !VolumeCtrl->EnableFlag)
+    if (PitchCtrl->MutingFlag || !VolumeCtrl->EnableFlag || 0 == VolumeCtrl->LengthCounter)
         return 0;
 
     if (VolumeCtrl->ConstantVolumeFlag)
@@ -230,9 +240,9 @@ static double NESAPU_GetTriangleSample(TriangleSequencer *Seq, double t)
     double Freq = NES_CPU_CLK / (32.0 * (double)(Seq->TimerPeriod + 1));
     t *= Freq;
     t -= (i64)t;
-    if (t > .5)
-        return -t;
-    return t;
+    if (t < .5)
+        return t;
+    return -t + 1;
 }
 
 
@@ -266,7 +276,7 @@ static u16 NESAPU_SweeperUpdateTimerPeriod(Sweeper *PitchCtrl, u16 CurrentTimerP
     }
     if (PitchCtrl->ClkDivider == 0 || PitchCtrl->ReloadFlag)
     {
-        PitchCtrl->ClkDivider = EnvelopeClkDivider + 1;
+        PitchCtrl->ClkDivider = EnvelopeClkDivider;
         PitchCtrl->ReloadFlag = false;
     }
     else PitchCtrl->ClkDivider--;
@@ -280,9 +290,9 @@ static u16 NESAPU_SweeperUpdateTimerPeriod(Sweeper *PitchCtrl, u16 CurrentTimerP
 
 static double NESAPU_GetNoiseSample(NoiseSequencer *Noise, double t)
 {
-    if ((Noise->LinearFeedbackShiftRegister & 0x1) || Noise->LengthCounter == 0)
+    if ((Noise->LinearFeedbackShiftRegister & 0x1) || Noise->Envelope.LengthCounter == 0)
         return 0;
-    return Noise->Envelope.Volume * (1.0 / MAX_VOLUME);
+    return (double)Noise->Envelope.Volume * (1.0 / MAX_VOLUME);
 }
 
 static void NESAPU_NoiseUpdateShiftRegister(NoiseSequencer *Noise)
@@ -297,19 +307,6 @@ static void NESAPU_NoiseUpdateShiftRegister(NoiseSequencer *Noise)
     Noise->LinearFeedbackShiftRegister |= Feedback << 14;
 }
 
-static void NESAPU_NoiseUpdate(NoiseSequencer *Noise)
-{
-    if (!Noise->Envelope.EnableFlag)
-    {
-        Noise->LengthCounter = 0;
-        return;
-    }
-
-    if (Noise->LengthCounter && !Noise->Envelope.LoopFlag)
-    {
-        Noise->LengthCounter--;
-    }
-}
 
 
 
@@ -358,8 +355,6 @@ void NESAPU_StepClock(NESAPU *This)
                 This->Pulse2.TimerPeriod,
                 This->Pulse2.Envelope.TmpClkDivider
             );
-            /* NO FUCKING WAY THIS WORKS FIRST TRY */
-            NESAPU_NoiseUpdate(&This->Noise);
         }
         /* the end of frame, reset the frame clk */
         if (This->FrameClockCounter == 14916)
@@ -418,7 +413,7 @@ u8 NESAPU_ExternalRead(NESAPU *This, u16 Addr)
 
 
 
-static void NESAPU_WritePulseRegisters(Sequencer *Pulse, u16 Addr, u8 Byte)
+static void NESAPU_WritePulseRegisters(NESAPU *This, Sequencer *Pulse, u16 Addr, u8 Byte)
 {
     static const double DutyCycleLookup[4] = { .125, .250, .500, .750 };
     switch (Addr)
@@ -450,6 +445,7 @@ static void NESAPU_WritePulseRegisters(Sequencer *Pulse, u16 Addr, u8 Byte)
     {
         MASKED_LOAD(Pulse->TmpTimerPeriod, (u16)Byte << 8, 0x0700);
         Pulse->TimerPeriod = Pulse->TmpTimerPeriod;
+        Pulse->Envelope.LengthCounter = This->LengthCounterTable[Byte >> 3];
         Pulse->Envelope.StartFlag = true;
     } break;
     }
@@ -458,9 +454,9 @@ static void NESAPU_WritePulseRegisters(Sequencer *Pulse, u16 Addr, u8 Byte)
 void NESAPU_ExternalWrite(NESAPU *This, u16 Addr, u8 Byte)
 {
     if (IN_RANGE(0x4000, Addr, 0x4003))
-        NESAPU_WritePulseRegisters(&This->Pulse1, Addr, Byte);
+        NESAPU_WritePulseRegisters(This, &This->Pulse1, Addr, Byte);
     else if (IN_RANGE(0x4004, Addr, 0x4007))
-        NESAPU_WritePulseRegisters(&This->Pulse2, Addr, Byte);
+        NESAPU_WritePulseRegisters(This, &This->Pulse2, Addr, Byte);
     else switch (Addr)
     {
     /* triangle */
@@ -503,7 +499,7 @@ void NESAPU_ExternalWrite(NESAPU *This, u16 Addr, u8 Byte)
     } break;
     case 0x400F:
     {
-        This->Noise.LengthCounter = This->LengthCounterTable[Byte >> 3];
+        This->Noise.Envelope.LengthCounter = This->LengthCounterTable[Byte >> 3];
         This->Noise.Envelope.StartFlag = true;
     } break;
 

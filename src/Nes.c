@@ -426,7 +426,7 @@ Platform_AudioConfig Nes_OnEntry(Platform_ThreadContext ThreadContext)
         .EnableAudio = true,
         .SampleRate = AudioSampleRate,
         .ChannelCount = AudioChannelCount, 
-        .BufferSizeBytes = 256 * AudioChannelCount * sizeof(int16_t),
+        .BufferSizeBytes = 1024 * AudioChannelCount * sizeof(int16_t),
         .BufferQueueSize = 8,
     };
 

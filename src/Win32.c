@@ -898,7 +898,7 @@ int WINAPI WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PCHAR CmdLine, in
     {
         double Now = Platform_GetTimeMillisec();
         Nes_OnLoop(sWin32_ThreadContext, Now - TimeOrigin);
-        Sleep(1);
+        //Sleep(1);
     }
 
 
