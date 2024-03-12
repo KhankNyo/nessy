@@ -189,7 +189,7 @@ static void NESAPU_EnvelopeUpdate(Envelope *VolumeCtrl)
 
 static double NESAPU_SequencerGetVolume(Sweeper *PitchCtrl, Envelope *VolumeCtrl)
 {
-    if (PitchCtrl->MutingFlag || !VolumeCtrl->EnableFlag || 0 == VolumeCtrl->LengthCounter)
+    if (PitchCtrl->MutingFlag || 0 == VolumeCtrl->LengthCounter)
         return 0;
 
     if (VolumeCtrl->ConstantVolumeFlag)
@@ -262,6 +262,8 @@ static u16 NESAPU_SweeperUpdateTimerPeriod(Sweeper *PitchCtrl, u16 CurrentTimerP
     {
         if (!PitchCtrl->MutingFlag)
             NewTimerPeriod = PitchCtrl->ShiftedTimerPeriod;
+        else
+            PitchCtrl->ClkDivider = PitchCtrl->TmpClkDivider;
 
         /* else the period remain unchanged */
     }
