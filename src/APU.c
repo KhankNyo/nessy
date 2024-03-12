@@ -8,7 +8,7 @@
  * some part of the code below is inherently spaghetti, 
  * and that is because digital logic itself is inherently spaghetti 
  * Some examples are:
- *   reading a register changes the state of an entire system (Envelope start flag and address 0x4003, 0x4007, 0x400F)
+ *   reading a register changes the state of an entire system (Envelope start flag @ addr 0x4003, 0x4007, 0x400F)
  *   a module accessing and modifying other modules' state directly (Sweep unit updating the timer period of the entire sequencer directly)
  * */
 
@@ -76,6 +76,7 @@ typedef struct TriangleSequencer
 typedef struct NoiseSequencer 
 {
     u16 Timer;
+    u16 TmpTimer;
     u16 LinearFeedbackShiftRegister:15;
     Bool8 ModeFlag;
 
@@ -134,9 +135,6 @@ NESAPU NESAPU_Init(u64 SeedForNoiseGeneration)
 
 /* sample generator */
 
-
-typedef double (*SampleGenerator)(Sequencer *, double t);
-
 static double GenerateSquareWave(Sequencer *Seq, double t)
 {
     /* 16.0: nameless magic, consult nesdev */
@@ -147,13 +145,6 @@ static double GenerateSquareWave(Sequencer *Seq, double t)
         1.0 : -1.0;
 }
 
-
-static double NESAPU_SequenceSample(Sequencer *Seq, double t, SampleGenerator SampleGenerator)
-{
-    double Sample = 0;
-    Sample = SampleGenerator(Seq, t);
-    return Sample;
-}
 
 
 
@@ -241,8 +232,8 @@ static double NESAPU_GetTriangleSample(TriangleSequencer *Seq, double t)
     t *= Freq;
     t -= (i64)t;
     if (t < .5)
-        return t;
-    return -t + 1;
+        return 2.0*t;
+    return 2.0*(-t + 1.0);
 }
 
 
@@ -288,15 +279,24 @@ static u16 NESAPU_SweeperUpdateTimerPeriod(Sweeper *PitchCtrl, u16 CurrentTimerP
 
 /* noise */
 
-static double NESAPU_GetNoiseSample(NoiseSequencer *Noise, double t)
+static double NESAPU_GetNoiseSample(NoiseSequencer *Noise)
 {
-    if ((Noise->LinearFeedbackShiftRegister & 0x1) || Noise->Envelope.LengthCounter == 0)
+    if ((Noise->LinearFeedbackShiftRegister & 0x1) || Noise->Envelope.LengthCounter == 0 || !Noise->Envelope.EnableFlag)
         return 0;
-    return (double)Noise->Envelope.Volume * (1.0 / MAX_VOLUME);
+    if (Noise->Envelope.ConstantVolumeFlag)
+        return Noise->Envelope.Volume * (1.0 / MAX_VOLUME);
+    return (double)Noise->Envelope.VolumeDecayCounter * (1.0 / MAX_VOLUME);
 }
 
 static void NESAPU_NoiseUpdateShiftRegister(NoiseSequencer *Noise)
 {
+    if (Noise->Timer)
+    {
+        Noise->Timer--;
+        return;
+    }
+
+    Noise->Timer = Noise->TmpTimer;
     u16 TheOtherBit = Noise->ModeFlag
         ? Noise->LinearFeedbackShiftRegister >> 6 
         : Noise->LinearFeedbackShiftRegister >> 1; 
@@ -317,22 +317,11 @@ void NESAPU_StepClock(NESAPU *This)
 #define IS_HALF_CLK(Clk) ((Clk) == 7457 || (Clk) == 14916)
 #define IS_QUARTER_CLK(Clk) (IS_HALF_CLK(Clk) || ((Clk) == 3729 || (Clk) == 11186))
 
-    /* the noise sequencer is updated every cpu clk??? */
-    if (This->ClockCounter % 3 == 0)
-    {
-        NESAPU_NoiseUpdateShiftRegister(&This->Noise);
-    }
-
     if (This->ClockCounter % 6 == 0)
     {
         This->ElapsedTime += 2.0 / NES_CPU_CLK;
         This->FrameClockCounter++;
-
-
-        /* NOTE: sweeper is updated every frame clk (every 2 CPU clk) */
-        NESAPU_SweeperUpdate(&This->Pulse1.Sweeper, This->Pulse1.TimerPeriod, true);
-        NESAPU_SweeperUpdate(&This->Pulse2.Sweeper, This->Pulse2.TimerPeriod, false);
-
+        NESAPU_NoiseUpdateShiftRegister(&This->Noise);
 
         /* adjust volume envelope */
         if (IS_QUARTER_CLK(This->FrameClockCounter))
@@ -345,6 +334,8 @@ void NESAPU_StepClock(NESAPU *This)
         /* note length and freq sweep */
         if (IS_HALF_CLK(This->FrameClockCounter))
         {
+            NESAPU_SweeperUpdate(&This->Pulse1.Sweeper, This->Pulse1.TimerPeriod, true);
+            NESAPU_SweeperUpdate(&This->Pulse2.Sweeper, This->Pulse2.TimerPeriod, false);
             This->Pulse1.TimerPeriod = NESAPU_SweeperUpdateTimerPeriod(
                 &This->Pulse1.Sweeper, 
                 This->Pulse1.TimerPeriod, 
@@ -363,12 +354,12 @@ void NESAPU_StepClock(NESAPU *This)
 
         double Pulse1 = 
             NESAPU_SequencerGetVolume(&This->Pulse1.Sweeper, &This->Pulse1.Envelope, This->Pulse1.TimerPeriod)
-            * NESAPU_SequenceSample(&This->Pulse1, This->ElapsedTime, GenerateSquareWave); 
+            * GenerateSquareWave(&This->Pulse1, This->ElapsedTime); 
         double Pulse2 = 
             NESAPU_SequencerGetVolume(&This->Pulse2.Sweeper, &This->Pulse2.Envelope, This->Pulse2.TimerPeriod)
-            * NESAPU_SequenceSample(&This->Pulse2, This->ElapsedTime, GenerateSquareWave);
+            * GenerateSquareWave(&This->Pulse2, This->ElapsedTime);
         double Triangle = NESAPU_GetTriangleSample(&This->Triangle, This->ElapsedTime);
-        double Noise = NESAPU_GetNoiseSample(&This->Noise, This->ElapsedTime);
+        double Noise = NESAPU_GetNoiseSample(&This->Noise);
         double DMC = 0;
 
 
@@ -445,7 +436,7 @@ static void NESAPU_WritePulseRegisters(NESAPU *This, Sequencer *Pulse, u16 Addr,
     {
         MASKED_LOAD(Pulse->TmpTimerPeriod, (u16)Byte << 8, 0x0700);
         Pulse->TimerPeriod = Pulse->TmpTimerPeriod;
-        Pulse->Envelope.LengthCounter = This->LengthCounterTable[Byte >> 3];
+        Pulse->Envelope.LengthCounter = This->LengthCounterTable[Byte >> 3] + 1;
         Pulse->Envelope.StartFlag = true;
     } break;
     }
@@ -494,12 +485,12 @@ void NESAPU_ExternalWrite(NESAPU *This, u16 Addr, u8 Byte)
     } break; 
     case 0x400E:
     {
-        This->Noise.Timer = This->NTSCNoisePeriodTable[Byte & 0x0F];
+        This->Noise.TmpTimer = This->NTSCNoisePeriodTable[Byte & 0x0F];
         This->Noise.ModeFlag = Byte & 0x80;
     } break;
     case 0x400F:
     {
-        This->Noise.Envelope.LengthCounter = This->LengthCounterTable[Byte >> 3];
+        This->Noise.Envelope.LengthCounter = This->LengthCounterTable[Byte >> 3] + 1;
         This->Noise.Envelope.StartFlag = true;
     } break;
 
