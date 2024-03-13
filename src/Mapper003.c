@@ -8,56 +8,44 @@
 
 typedef struct NESMapper003 
 {
+    u8 *PrgRom;
     u32 PrgRomSize;
-    u32 ChrMemSize;
-    u32 CurrentChrBank;
-    u32 ChrBankSize;
+
+    u32 ChrRomSize;
+    u8 *ChrRom;
+    u8 *CurrentChrBank;
     Bool8 HasBusConflict;
     /* data after */
 } NESMapper003;
-
-static u8 *Mp003_GetPrgRomPtr(NESMapper003 *Mp003)
-{
-    u8 *BytePtr = ((u8*)Mp003) + sizeof *Mp003;
-    return BytePtr;
-}
-
-static u8 *Mp003_GetChrPtr(NESMapper003 *Mp003)
-{
-    u8 *BytePtr = Mp003_GetPrgRomPtr(Mp003);
-    return BytePtr + Mp003->PrgRomSize;
-}
-
 
 
 NESMapperInterface *NESMapper003_Init(const void *PrgRom, isize PrgRomSize, const void *ChrRom, isize ChrRomSize, Bool8 HasBusConflict)
 {
     DEBUG_ASSERT(ChrRomSize);
-
     NESMapper003 *Mapper = NULL;
-    isize TotalSize = sizeof *Mapper + PrgRomSize + ChrRomSize;
-    Mapper = malloc(TotalSize);
-    DEBUG_ASSERT(Mapper);
+    u8 *Ptr = malloc(sizeof(*Mapper) + PrgRomSize + ChrRomSize);
+    DEBUG_ASSERT(Ptr);
 
+    Mapper = (NESMapper003 *)Ptr;
+    Mapper->HasBusConflict = false;
+
+    Mapper->PrgRom = Ptr + sizeof(*Mapper);
     Mapper->PrgRomSize = PrgRomSize;
-    Mapper->ChrMemSize = ChrRomSize;
-    Mapper->CurrentChrBank = 0;
-    Mapper->ChrBankSize = 8*1024;
-    Mapper->HasBusConflict = HasBusConflict;
+    Memcpy(Mapper->PrgRom, PrgRom, PrgRomSize);
 
-    /* copy the prg and chr rom */
-    u8 *MapperPrgRom = Mp003_GetPrgRomPtr(Mapper);
-    u8 *MapperChrRom = Mp003_GetChrPtr(Mapper);
-    Memcpy(MapperPrgRom, PrgRom, PrgRomSize);
-    Memcpy(MapperChrRom, ChrRom, ChrRomSize);
+    Mapper->ChrRom = Mapper->PrgRom + PrgRomSize;
+    Mapper->CurrentChrBank = Mapper->ChrRom;
+    Mapper->ChrRomSize = ChrRomSize;
+    if (ChrRom)
+        Memcpy(Mapper->ChrRom, ChrRom, ChrRomSize);
+    else Memset(Mapper->ChrRom, 0, ChrRomSize);
     return Mapper;
 }
 
 void NESMapper003_Reset(NESMapperInterface *MapperInterface)
 {
     NESMapper003 *Mapper = MapperInterface;
-    Mapper->CurrentChrBank = 0;
-    Mapper->ChrBankSize = 8 * 1024;
+    Mapper->CurrentChrBank = Mapper->ChrRom;
 }
 
 void NESMapper003_Destroy(NESMapperInterface *Mapper)
@@ -74,10 +62,7 @@ u8 NESMapper003_PPURead(NESMapperInterface *MapperInterface, u16 Addr)
     /* palette */
     if (IN_RANGE(0x0000, Addr, 0x1FFF))
     {
-        u32 PhysAddr = Addr % Mapper->ChrBankSize;
-        u32 BaseAddr = Mapper->CurrentChrBank * (Mapper->ChrBankSize);
-        u8 *ChrRom = Mp003_GetChrPtr(Mapper);
-        return ChrRom[BaseAddr + PhysAddr];
+        return Mapper->CurrentChrBank[Addr];
     }
     return 0;
 }
@@ -88,9 +73,7 @@ u8 NESMapper003_CPURead(NESMapperInterface *MapperInterface, u16 Addr)
     /* prg rom */
     if (IN_RANGE(0x8000, Addr, 0xFFFF))
     {
-        u16 PhysAddr = Addr % Mapper->PrgRomSize;
-        u8 *PrgRom = Mp003_GetPrgRomPtr(Mapper);
-        return PrgRom[PhysAddr];
+        return Mapper->PrgRom[Addr & (Mapper->PrgRomSize - 1)];
     }
     return 0;
 }
@@ -101,10 +84,7 @@ void NESMapper003_PPUWrite(NESMapperInterface *MapperInterface, u16 Addr, u8 Byt
     /* palette */
     if (IN_RANGE(0x0000, Addr, 0x1FFF))
     {
-        u32 PhysAddr = Addr % Mapper->ChrBankSize;
-        u32 BaseAddr = Mapper->CurrentChrBank * Mapper->ChrBankSize;
-        u8 *ChrRom = Mp003_GetChrPtr(Mapper);
-        ChrRom[BaseAddr + PhysAddr] = Byte;
+        Mapper->CurrentChrBank[Addr] = Byte;
     }
 }
 
@@ -114,16 +94,9 @@ void NESMapper003_CPUWrite(NESMapperInterface *MapperInterface, u16 Addr, u8 Byt
     /* prg rom (chr bank select) */
     if (IN_RANGE(0x8000, Addr, 0xFFFF))
     {
-        u8 ValueAtAddr = 0xFF;
-        /* bus conflict, byte anded with value at the location */
         if (Mapper->HasBusConflict)
-        {
-            u16 PhysAddr = Addr % Mapper->PrgRomSize;
-            u8 *PrgRom = Mp003_GetPrgRomPtr(Mapper);
-            ValueAtAddr = PrgRom[PhysAddr];
-        }
-        /* lower 2 bits only */
-        Mapper->CurrentChrBank = ValueAtAddr & Byte & 0x03;
+            Byte &= Mapper->PrgRom[Addr & (Mapper->PrgRomSize - 1)];
+        Mapper->CurrentChrBank = Mapper->ChrRom + (Byte & 0x03)*0x2000;
     }
 }
 

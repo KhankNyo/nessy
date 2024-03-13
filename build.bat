@@ -2,7 +2,7 @@
 
 set "INCARG=-I.\src\Include\ -I.\src\Include\Win32TCC"
 set "CC=gcc -O2 -Wno-unused-const-variable -Wno-type-limits -Wall -Wextra -Wpedantic %INCARG%"
-set "MSVC_CL=cl /std:c11 /Zi /DDEBUG /DEBUG /MTd /I..\src\Include\"
+set "MSVC_CL=cl /O2 /std:c11 /Zi /DDEBUG /DEBUG /MTd /I..\src\Include\"
 
 if "clean"=="%1" (
     if exist bin\ rmdir /q /s bin

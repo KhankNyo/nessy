@@ -610,7 +610,7 @@ void NESPPU_UpdateShifters(NESPPU *This)
     }
 }
 
-void NESPPU_ReloadBackgroundShifters(NESPPU *This)
+static void NESPPU_ReloadBackgroundShifters(NESPPU *This)
 {
     if (This->Mask & PPUMASK_SHOW_BG)
     {
@@ -627,14 +627,29 @@ void NESPPU_ReloadBackgroundShifters(NESPPU *This)
     }
 }
 
+static Bool8 NESPPU_ShouldRenderBackground(NESPPU *This)
+{
+    Bool8 ShouldRender = (This->Mask & PPUMASK_SHOW_BG) != 0;
+    Bool8 ShouldRenderEdge = true;
+    if ((This->Mask & PPUMASK_SHOW_BG_LEFT) == 0)
+        ShouldRenderEdge = This->Clk < 9;
+    return ShouldRender && ShouldRenderEdge;
+}
+
+static Bool8 NESPPU_ShouldRenderForeground(NESPPU *This)
+{
+    Bool8 ShouldRender = (This->Mask & PPUMASK_SHOW_SPR) != 0;
+    Bool8 ShouldRenderEdge = true;
+    if ((This->Mask & PPUMASK_SHOW_SPR_LEFT) == 0)
+        ShouldRenderEdge = This->Clk < 9;
+    return ShouldRender && ShouldRenderEdge;
+}
+
 static void NESPPU_RenderSinglePixel(NESPPU *This)
 {
-    Bool8 ShouldRenderBackground = (This->Mask & PPUMASK_SHOW_BG) != 0;
-    if (!(This->Mask & PPUMASK_SHOW_BG_LEFT) && This->Clk <= 8)
-        ShouldRenderBackground = false;
-    Bool8 ShouldRenderForeground = (This->Mask & PPUMASK_SHOW_SPR) != 0;
-    if (!(This->Mask & PPUMASK_SHOW_SPR_LEFT) && This->Clk <= 8)
-        ShouldRenderForeground = false;
+    Bool8 ShouldRenderBackground = NESPPU_ShouldRenderBackground(This);
+    Bool8 ShouldRenderForeground = NESPPU_ShouldRenderForeground(This);
+
     /* get background pixel values from shift registers */
     u8 BackgroundPixel = 0;
     u8 BackgroundPalette = 0;
@@ -694,9 +709,15 @@ static void NESPPU_RenderSinglePixel(NESPPU *This)
     u8 Palette = 0;
     if (BackgroundPixel && ForegroundPixel)
     {
-        uint LowerBound = (This->Mask & (PPUMASK_SHOW_SPR_LEFT | PPUMASK_SHOW_BG_LEFT))?
-            1 : 9;
-        if (RenderingSpr0 && IN_RANGE(LowerBound, This->Clk, 256) && ShouldRenderForeground && ShouldRenderBackground)
+        /* spr 0 hit, very specific conditions */
+        Bool8 IsAtEdge = false;
+        if (This->Mask & (PPUMASK_SHOW_BG_LEFT | PPUMASK_SHOW_SPR_LEFT))
+            IsAtEdge = This->Clk == 1 || This->Clk == 8;
+        if (RenderingSpr0 
+        && This->Clk != 255 
+        && !IsAtEdge
+        && ShouldRenderForeground 
+        && ShouldRenderBackground)
         {
             This->Status |= PPUSTATUS_SPR0_HIT;
         }
@@ -894,18 +915,16 @@ Bool8 NESPPU_StepClock(NESPPU *This)
      * */
 
 
-    uint ShouldRenderBackground = This->Mask & PPUMASK_SHOW_BG;
-    if (!(This->Mask & PPUMASK_SHOW_BG_LEFT) && This->Clk <= 8)
-        ShouldRenderBackground = false;
-    uint ShouldRenderForeground = This->Mask & PPUMASK_SHOW_SPR;
-    if (!(This->Mask & PPUMASK_SHOW_SPR_LEFT) && This->Clk <= 8)
-        ShouldRenderBackground = false;
-    uint ShouldRender = ShouldRenderBackground || ShouldRenderForeground;
+    Bool8 ShouldRenderBackground = NESPPU_ShouldRenderBackground(This);
+    Bool8 ShouldRenderForeground = NESPPU_ShouldRenderForeground(This);
+    Bool8 ShouldRender = ShouldRenderBackground || ShouldRenderForeground;
 
+#if 1
     if (This->ClkSinceVBlank)
         This->ClkSinceVBlank++;
     if (This->ClkSinceVBlank == 4*(2270 + 199)) /* magic */
         This->Status &= ~PPUSTATUS_VBLANK;
+#endif 
 
     /* putting these magic numbers in variable name makes this harder to read */
     /* visible scanlines (-1 is pre-render) */
@@ -918,6 +937,7 @@ Bool8 NESPPU_StepClock(NESPPU *This)
             {
                 This->Status &= ~(
                     PPUSTATUS_SPR0_HIT 
+                    //| PPUSTATUS_VBLANK
                     | PPUSTATUS_SPR_OVERFLOW
                 );
 
@@ -1042,8 +1062,10 @@ Bool8 NESPPU_StepClock(NESPPU *This)
             This->Status |= PPUSTATUS_VBLANK;
             This->ClkSinceVBlank = 1;
         }
-
-        else This->ShouldNotSetVBlankThisFrame = false;
+        else 
+        {
+            This->ShouldNotSetVBlankThisFrame = false;
+        }
 
         if (This->SupressNMIThisFrame)
         {
@@ -1082,4 +1104,4 @@ Bool8 NESPPU_StepClock(NESPPU *This)
     return FrameCompleted;
 }
 
-#endif /* NES_C */
+#endif /* NES_PPU_C */

@@ -613,7 +613,7 @@ static LRESULT CALLBACK Win32_MainWndProc(HWND Window, UINT Msg, WPARAM WParam, 
 static Bool8 Win32_PollInputs(void)
 {
     MSG Msg;
-    while (PeekMessageA(&Msg, NULL, 0, 0, PM_REMOVE))
+    while (PeekMessageA(&Msg, NULL, 0, 0, PM_REMOVE | PM_NOYIELD))
     {
         if (Msg.message == WM_QUIT)
             return false;
