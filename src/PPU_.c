@@ -116,15 +116,21 @@ static u16 NESPPU_MirrorNametableAddr(const NESPPU *This, u16 LogicalAddr)
     {
     case NAMETABLE_VERTICAL:
     {
+        PhysAddr = LogicalAddr % (NES_NAMETABLE_SIZE*2);
     } break;
     case NAMETABLE_HORIZONTAL:
     {
+        PhysAddr = LogicalAddr % NES_NAMETABLE_SIZE;
+        if (LogicalAddr > 0x07FF)
+            PhysAddr += NES_NAMETABLE_SIZE;
     } break;
     case NAMETABLE_ONESCREEN_HI:
     {
+        PhysAddr = (LogicalAddr % NES_NAMETABLE_SIZE);
     } break;
     case NAMETABLE_ONESCREEN_LO:
     {
+        PhysAddr = (LogicalAddr % NES_NAMETABLE_SIZE) + NES_NAMETABLE_SIZE;
     } break;
     }
     return PhysAddr;
