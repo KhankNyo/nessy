@@ -27,7 +27,7 @@ NESMapperInterface *NESMapper003_Init(const void *PrgRom, isize PrgRomSize, cons
     DEBUG_ASSERT(Ptr);
 
     Mapper = (NESMapper003 *)Ptr;
-    Mapper->HasBusConflict = false;
+    Mapper->HasBusConflict = HasBusConflict;
 
     Mapper->PrgRom = Ptr + sizeof(*Mapper);
     Mapper->PrgRomSize = PrgRomSize;

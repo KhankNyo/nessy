@@ -592,7 +592,7 @@ void NESPPU_UpdateShifters(NESPPU *This)
         This->BgAttrLoShifter <<= 1;
     }
 
-    if ((This->Mask & PPUMASK_SHOW_SPR) && IN_RANGE(1, This->Clk, 257))
+    if ((This->Mask & PPUMASK_SHOW_SPR) && IN_RANGE(1, This->Clk, 256))
     {
         for (uint i = 0; i < This->VisibleSpriteCount; i++)
         {
@@ -857,7 +857,7 @@ static void NESPPU_LoadSpriteData(NESPPU *This)
             u16 BaseAddr = (u16)(CurrentSprite->ID & 0x1) << 12; /* first bit determines the pattern table location */
             uint IsLowerTile = CurrentHeight >= 8;
             u16 SpriteIndex = (u16)(CurrentSprite->ID & 0xFE) + IsLowerTile;
-            if (CurrentHeight > 8) 
+            if (IsLowerTile) 
                 CurrentHeight -= 8;
             u16 PatternSelect = CurrentSprite->Attribute & PPU_OA_FLIP_VERTICAL
                 ? (7 - CurrentHeight)
@@ -919,12 +919,10 @@ Bool8 NESPPU_StepClock(NESPPU *This)
     Bool8 ShouldRenderForeground = NESPPU_ShouldRenderForeground(This);
     Bool8 ShouldRender = ShouldRenderBackground || ShouldRenderForeground;
 
-#if 1
     if (This->ClkSinceVBlank)
         This->ClkSinceVBlank++;
     if (This->ClkSinceVBlank == 4*(2270 + 199)) /* magic */
         This->Status &= ~PPUSTATUS_VBLANK;
-#endif 
 
     /* putting these magic numbers in variable name makes this harder to read */
     /* visible scanlines (-1 is pre-render) */
@@ -946,7 +944,7 @@ Bool8 NESPPU_StepClock(NESPPU *This)
                 Memset(This->SprPatternLoShifter, 0, sizeof This->SprPatternLoShifter);
             }
             /* constantly reload y components */
-            else if (ShouldRender && IN_RANGE(280, This->Clk, 304))
+            else if (ShouldRenderBackground && IN_RANGE(280, This->Clk, 304))
             {
                 u16 YComponentMask = COARSE_Y_MASK | FINE_Y_MASK | (1 << 11); /* nametable y */
                 MASKED_LOAD(This->Loopy.v, This->Loopy.t, YComponentMask);
@@ -1026,7 +1024,7 @@ Bool8 NESPPU_StepClock(NESPPU *This)
                 This->VisibleSpriteCount = 0;
 
                 This->Spr0IsVisible = false;
-                for (uint i = 0; i < STATIC_ARRAY_SIZE(This->OAM.Entries) && This->VisibleSpriteCount < 9; i++)
+                for (uint i = 0; i < STATIC_ARRAY_SIZE(This->OAM.Entries); i++)
                 {
                     int ScanlineDiff = This->Scanline - This->OAM.Entries[i].y;
                     int SpriteHeight = This->Ctrl & PPUCTRL_SPR_SIZE16? 16 : 8;
@@ -1037,14 +1035,14 @@ Bool8 NESPPU_StepClock(NESPPU *This)
                             if (i == 0) /* sprite 0 */
                                 This->Spr0IsVisible = true;
                             This->VisibleSprites[This->VisibleSpriteCount] = This->OAM.Entries[i];
+                            This->VisibleSpriteCount++;
                         }
-                        This->VisibleSpriteCount++;
+                        else
+                        {
+                            This->Status |= PPUSTATUS_SPR_OVERFLOW;
+                            break;
+                        }
                     }
-                }
-                if (This->VisibleSpriteCount > 8)
-                {
-                    This->Status |= PPUSTATUS_SPR_OVERFLOW;
-                    This->VisibleSpriteCount = 8;
                 }
             }
             /* find data from pattern memory to draw the sprites needed */
